@@ -1,0 +1,47 @@
+local cs = game:GetService("CollectionService")
+local Net = require(game:GetService("ReplicatedStorage").packages.Net)
+
+local PRIORITY = {
+    ["Piraiba"] = true,
+    ["Blackfin Barracuda"] = true,
+    ["Black Snoek"] = true,
+    ["Atlantic Goliath Grouper"] = true,
+    ["Sixgill Shark"] = true,
+    ["Blackmouth Catshark"] = true,
+    ["Motoro Stingray"] = true,
+    ["Sand Tiger Shark"] = true,
+    ["Wobbegong Shark"] = true,
+}
+
+local function catchFish(fish)
+    local uid = fish:GetAttribute("UID")
+    if uid then
+        local remote = Net:RemoteEvent("SpearFishing/Minigame", -1)
+        remote:FireServer(uid)
+        task.wait(1.1)
+        remote:FireServer(uid, true)
+        print("Done:", fish.Name, uid)
+    end
+end
+
+while true do
+    for _, zone in cs:GetTagged("SpearfishingZone") do
+        local zoneFish = zone:FindFirstChild("ZoneFish")
+        if zoneFish then
+            local normal = {}
+
+            for _, fish in zoneFish:GetChildren() do
+                if PRIORITY[fish.Name] then
+                    catchFish(fish)
+                else
+                    table.insert(normal, fish)
+                end
+            end
+
+            for _, fish in normal do
+                catchFish(fish)
+            end
+        end
+    end
+    task.wait(0)
+end
