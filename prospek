@@ -1,7 +1,5 @@
--- ==================== PATCH LYNX GUI ENCODING ====================
 local rawLib = game:HttpGet('https://raw.githubusercontent.com/GrexXMeng/menghub-api/refs/heads/main/Lynx_Gui')
 
--- Fix mojibake characters
 local fixes = {
     ["â\"€"] = "─",      -- minimize button line
     ["â–¼"] = "▼",       -- category arrow
@@ -20,7 +18,6 @@ end
 
 local Library = loadstring(rawLib)()
 
--- ==================== GOLD PAN AUTO ====================
 local PointToRegion = require(game.ReplicatedStorage.Modules.Location.PointToRegion)
 local player = game.Players.LocalPlayer
 local hrp = player.Character.HumanoidRootPart
@@ -32,7 +29,6 @@ local searchRadius = 50
 local searchStep = 10
 local scanInterval = 5
 
--- Cleanup connections tracker
 local connections = {}
 local function addConnection(conn)
     table.insert(connections, conn)
@@ -96,7 +92,6 @@ local function teleport(pos)
     task.wait(0.5)
 end
 
--- ==================== LYNX GUI WINDOW ====================
 local Window = Library:Window({
     Title = "Lynx",
     Footer = "ANU MAS"
@@ -105,7 +100,7 @@ local Window = Library:Window({
 local MainTab = Window:AddTab({ Name = "Main", Icon = "home" })
 local SettingsTab = Window:AddTab({ Name = "Settings", Icon = "settings" })
 
--- Status Section
+-- Status
 local StatusSection = MainTab:AddSection("Status", true)
 local statusLabel, panLabel, scanLabel
 
@@ -147,7 +142,7 @@ local function updatePanLabel()
     end
 end
 
--- Auto scan loop independent
+-- Auto scan
 local scanRunning = true
 task.spawn(function()
     while scanRunning do
@@ -166,7 +161,7 @@ task.spawn(function()
     end
 end)
 
--- Auto Farm Toggle
+-- Auto Farm
 MainTab:AddSection("Farm", true):AddToggle({
     Title = "Auto Farm",
     Default = false,
@@ -213,7 +208,7 @@ MainTab:AddSection("Farm", true):AddToggle({
                         break
                     end
 
-                    -- Collect loop sampai pan full
+                    
                     if depositPos and isRunning then
                         updateStatus("Asep ganteng")
                         teleport(depositPos)
@@ -227,7 +222,6 @@ MainTab:AddSection("Farm", true):AddToggle({
                         until fill >= capacity or not isRunning
                     end
 
-                    -- Pan + shake loop di water
                     if waterPos and isRunning then
                         currentPan, location = getPan()
                         if not currentPan then break end
@@ -259,9 +253,9 @@ MainTab:AddSection("Farm", true):AddToggle({
     end
 })
 
--- Force Re-Scan Button
+-- Re-Scan Button
 MainTab:AddSection("Scan", true):AddButton({
-    Title = "Force Re-Scan",
+    Title = "Scan posisi",
     Callback = function()
         scanLabel._titleLabel.Text = "Scan: Scan manual"
         task.spawn(function()
@@ -287,14 +281,13 @@ MainTab:AddSection("Scan", true):AddButton({
     end
 })
 
--- Stop semua kalau character respawn/mati
 addConnection(player.CharacterAdded:Connect(function(char)
     isRunning = false
     hrp = char:WaitForChild("HumanoidRootPart")
     updateStatus("respawn farm berhenti")
 end))
 
--- Settings Tab
+-- Settings
 local SettingsSection = SettingsTab:AddSection("Scan Settings", true)
 
 SettingsSection:AddInput({
@@ -336,7 +329,6 @@ SettingsSection:AddInput({
     end
 })
 
--- Cleanup kalau script di-destroy
 addConnection(script.AncestryChanged:Connect(function()
     if not script.Parent then
         scanRunning = false
