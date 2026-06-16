@@ -1,0 +1,346 @@
+-- ==================== PATCH LYNX GUI ENCODING ====================
+local rawLib = game:HttpGet('https://raw.githubusercontent.com/GrexXMeng/menghub-api/refs/heads/main/Lynx_Gui')
+
+-- Fix mojibake characters
+local fixes = {
+    ["â\"€"] = "─",      -- minimize button line
+    ["â–¼"] = "▼",       -- category arrow
+    ["â‹°"] = "⋰",       -- resize handle
+    ["âš ï¸�"] = "⚠️",   -- warning emoji (or just "!")
+    ["â€”"] = "—",       -- em dash
+    ["â€¦"] = "…",       -- ellipsis (if any)
+    ["â€œ"] = "\"",      -- left double quote
+    ["â€"] = "\"",      -- right double quote
+    ["â€™"] = "'",       -- apostrophe
+}
+
+for bad, good in pairs(fixes) do
+    rawLib = rawLib:gsub(bad, good)
+end
+
+local Library = loadstring(rawLib)()
+
+-- ==================== GOLD PAN AUTO ====================
+local PointToRegion = require(game.ReplicatedStorage.Modules.Location.PointToRegion)
+local player = game.Players.LocalPlayer
+local hrp = player.Character.HumanoidRootPart
+
+local isRunning = false
+local depositPos = nil
+local waterPos = nil
+local searchRadius = 50
+local searchStep = 10
+local scanInterval = 5
+
+-- Cleanup connections tracker
+local connections = {}
+local function addConnection(conn)
+    table.insert(connections, conn)
+    return conn
+end
+local function cleanupConnections()
+    for _, conn in connections do
+        if conn and conn.Connected then
+            conn:Disconnect()
+        end
+    end
+    connections = {}
+end
+
+local function getPan()
+    local char = player.Character
+    if not char then return nil end
+    for _, tool in char:GetChildren() do
+        if tool:IsA("Tool") and tool:FindFirstChild("Scripts") then
+            local s = tool.Scripts
+            if s:FindFirstChild("Collect") and s:FindFirstChild("Pan") and s:FindFirstChild("Shake") then
+                return tool, "character"
+            end
+        end
+    end
+    local bp = player:FindFirstChild("BackpackTwo")
+    if not bp then return nil end
+    for _, tool in bp:GetChildren() do
+        if tool:IsA("Tool") and tool:FindFirstChild("Scripts") then
+            local s = tool.Scripts
+            if s:FindFirstChild("Collect") and s:FindFirstChild("Pan") and s:FindFirstChild("Shake") then
+                return tool, "backpack"
+            end
+        end
+    end
+    return nil
+end
+
+local function findNearestRegion(targetRegion)
+    local bestPos = nil
+    local bestDist = math.huge
+    local origin = hrp.Position
+    for x = -searchRadius, searchRadius, searchStep do
+        for z = -searchRadius, searchRadius, searchStep do
+            local testPos = Vector3.new(origin.X + x, origin.Y, origin.Z + z)
+            local ok, region = pcall(PointToRegion.GetPanningRegion, testPos)
+            if ok and region == targetRegion then
+                local dist = (testPos - origin).Magnitude
+                if dist < bestDist then
+                    bestDist = dist
+                    bestPos = testPos
+                end
+            end
+        end
+    end
+    return bestPos
+end
+
+local function teleport(pos)
+    hrp.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
+    task.wait(0.5)
+end
+
+-- ==================== LYNX GUI WINDOW ====================
+local Window = Library:Window({
+    Title = "Lynx",
+    Footer = "ANU MAS"
+})
+
+local MainTab = Window:AddTab({ Name = "Main", Icon = "home" })
+local SettingsTab = Window:AddTab({ Name = "Settings", Icon = "settings" })
+
+-- Status Section
+local StatusSection = MainTab:AddSection("Status", true)
+local statusLabel, panLabel, scanLabel
+
+do
+    local para = StatusSection:AddParagraph({
+        Title = "Status: Nganggur",
+        Content = ""
+    })
+    statusLabel = para
+    statusLabel._titleLabel.Text = "Status: Nganggur"
+
+    local para2 = StatusSection:AddParagraph({
+        Title = "Pan: Mencari",
+        Content = ""
+    })
+    panLabel = para2
+    panLabel._titleLabel.Text = "Pan: Mencari"
+
+    local para3 = StatusSection:AddParagraph({
+        Title = "Scan: Sabar yak",
+        Content = ""
+    })
+    scanLabel = para3
+    scanLabel._titleLabel.Text = "Scan: Sabar yak"
+end
+
+local function updateStatus(text)
+    if statusLabel and statusLabel._titleLabel then
+        statusLabel._titleLabel.Text = "Status: " .. text
+    end
+end
+
+local function updatePanLabel()
+    local pan, loc = getPan()
+    if pan then
+        panLabel._titleLabel.Text = "Pan: " .. pan.Name .. " (" .. loc .. ")"
+    else
+        panLabel._titleLabel.Text = "Pan: Mana pan lu tol"
+    end
+end
+
+-- Auto scan loop independent
+local scanRunning = true
+task.spawn(function()
+    while scanRunning do
+        updatePanLabel()
+        scanLabel._titleLabel.Text = "Scan: Scanning..."
+        local newDeposit = findNearestRegion("Deposit")
+        local newWater = findNearestRegion("Water")
+        if newDeposit then depositPos = newDeposit end
+        if newWater then waterPos = newWater end
+        if depositPos and waterPos then
+            scanLabel._titleLabel.Text = "Scan: Ketemu"
+        else
+            scanLabel._titleLabel.Text = "Scan: Belum ketemu tol"
+        end
+        task.wait(scanInterval)
+    end
+end)
+
+-- Auto Farm Toggle
+MainTab:AddSection("Farm", true):AddToggle({
+    Title = "Auto Farm",
+    Default = false,
+    NoSave = false,
+    Callback = function(val)
+        isRunning = val
+        if val then
+            local pan = getPan()
+            if not pan then
+                updateStatus("Equip pan nya tol")
+                Library:MakeNotify({
+                    Title = "Error",
+                    Description = "Equip tol.",
+                    Color = Color3.fromRGB(220, 50, 50),
+                    Delay = 3
+                })
+                isRunning = false
+                return
+            end
+            if not depositPos or not waterPos then
+                updateStatus("Sabar tol")
+                repeat task.wait(0.1) until (depositPos and waterPos) or not isRunning
+            end
+            task.spawn(function()
+                while isRunning do
+                    local currentPan, location = getPan()
+                    if not currentPan then
+                        updateStatus("Pan hilang!")
+                        Library:MakeNotify({
+                            Title = "Error",
+                            Description = "Pan lu mana tol",
+                            Color = Color3.fromRGB(220, 50, 50),
+                            Delay = 3
+                        })
+                        isRunning = false
+                        break
+                    end
+
+                    local pan_tool = location == "character" and currentPan
+                        or player.BackpackTwo:FindFirstChild(currentPan.Name)
+
+                    if not pan_tool then
+                        isRunning = false
+                        break
+                    end
+
+                    -- Collect loop sampai pan full
+                    if depositPos and isRunning then
+                        updateStatus("Asep ganteng")
+                        teleport(depositPos)
+                        repeat
+                            pcall(function()
+                                pan_tool.Scripts.Collect:InvokeServer(1, false)
+                            end)
+                            local fill = pan_tool:GetAttribute("Fill") or 0
+                            local capacity = player:WaitForChild("Stats"):GetAttribute("Capacity") or 1
+                            task.wait(0.1)
+                        until fill >= capacity or not isRunning
+                    end
+
+                    -- Pan + shake loop di water
+                    if waterPos and isRunning then
+                        currentPan, location = getPan()
+                        if not currentPan then break end
+                        pan_tool = location == "character" and currentPan
+                            or player.BackpackTwo:FindFirstChild(currentPan.Name)
+                        if not pan_tool then break end
+
+                        updateStatus("Asep ganteng")
+                        teleport(waterPos)
+                        pcall(function()
+                            pan_tool.Scripts.Pan:InvokeServer()
+                        end)
+                        task.wait(0.5)
+                        updateStatus("Shaking...")
+                        while isRunning and player.Character:GetAttribute("Panning") do
+                            pcall(function()
+                                pan_tool.Scripts.Shake:FireServer()
+                            end)
+                            task.wait(0.1)
+                        end
+                        task.wait(0.5)
+                    end
+                end
+                updateStatus("Stopped")
+            end)
+        else
+            updateStatus("Idle")
+        end
+    end
+})
+
+-- Force Re-Scan Button
+MainTab:AddSection("Scan", true):AddButton({
+    Title = "Force Re-Scan",
+    Callback = function()
+        scanLabel._titleLabel.Text = "Scan: Scan manual"
+        task.spawn(function()
+            depositPos = findNearestRegion("Deposit")
+            waterPos = findNearestRegion("Water")
+            if depositPos and waterPos then
+                scanLabel._titleLabel.Text = "Scan: Ketemu nih tol"
+                Library:MakeNotify({
+                    Title = "Scan Selesai",
+                    Description = "Idan ganteng",
+                    Delay = 3
+                })
+            else
+                scanLabel._titleLabel.Text = "Scan: Pindah tol"
+                Library:MakeNotify({
+                    Title = "Scan Gagal",
+                    Description = "Pindah lokasi dulu",
+                    Color = Color3.fromRGB(220, 50, 50),
+                    Delay = 3
+                })
+            end
+        end)
+    end
+})
+
+-- Stop semua kalau character respawn/mati
+addConnection(player.CharacterAdded:Connect(function(char)
+    isRunning = false
+    hrp = char:WaitForChild("HumanoidRootPart")
+    updateStatus("respawn farm berhenti")
+end))
+
+-- Settings Tab
+local SettingsSection = SettingsTab:AddSection("Scan Settings", true)
+
+SettingsSection:AddInput({
+    Title = "Search Radius",
+    Default = "200",
+    Placeholder = "50 - 500",
+    NoSave = true,
+    Callback = function(val)
+        local num = tonumber(val)
+        if num then
+            searchRadius = math.clamp(num, 50, 500)
+        end
+    end
+})
+
+SettingsSection:AddInput({
+    Title = "Search Step",
+    Default = "10",
+    Placeholder = "5 - 30",
+    NoSave = true,
+    Callback = function(val)
+        local num = tonumber(val)
+        if num then
+            searchStep = math.clamp(num, 5, 30)
+        end
+    end
+})
+
+SettingsSection:AddInput({
+    Title = "Auto Scan Interval",
+    Default = "10",
+    Placeholder = "5 - 60",
+    NoSave = true,
+    Callback = function(val)
+        local num = tonumber(val)
+        if num then
+            scanInterval = math.clamp(num, 5, 60)
+        end
+    end
+})
+
+-- Cleanup kalau script di-destroy
+addConnection(script.AncestryChanged:Connect(function()
+    if not script.Parent then
+        scanRunning = false
+        isRunning = false
+        cleanupConnections()
+    end
+end))
