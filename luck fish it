@@ -1,0 +1,250 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local localPlayer = Players.LocalPlayer
+
+-- ==================== ANTI-DETECT METATABLE HOOK ====================
+local function secureHook(obj, method, replacement)
+    local mt = getrawmetatable(obj)
+    if not mt then return false end
+    
+    setreadonly(mt, false)
+    
+    -- Simpan original di tempat aman
+    local original = mt.__index[method] or obj[method]
+    if not original then return false end
+    
+    -- Ganti dengan proxy
+    mt.__index[method] = function(self, ...)
+        return replacement(self, original, ...)
+    end
+    
+    setreadonly(mt, true)
+    return true
+end
+
+-- ==================== REPLION DEEP HOOK ====================
+local Replion = require(ReplicatedStorage.Packages.Replion)
+
+-- Hook WaitReplion di metatable
+secureHook(Replion.Client, "WaitReplion", function(self, original, name)
+    local replion = original(self, name)
+    if not replion then return nil end
+    
+    -- Clone replion biar original gak ke-modify
+    local fakeReplion = {}
+    
+    -- Copy semua method
+    for k, v in pairs(replion) do
+        if typeof(v) == "function" then
+            fakeReplion[k] = function(_, ...)
+                -- Intercept GetExpect
+                if k == "GetExpect" then
+                    local key = ...
+                    
+                    if typeof(key) == "table" and key[1] == "Settings" and key[2] == "Luck Modifiers" then
+                        return true
+                    end
+                    
+                    if key == "EquippedPotions" then
+                        return {
+                            {Id = "1", Infinite = true, Quantity = 999},
+                            {Id = "2", Infinite = true, Quantity = 999},
+                            {Id = "3", Infinite = true, Quantity = 999},
+                            {Id = "4", Infinite = true, Quantity = 999},
+                            {Id = "5", Infinite = true, Quantity = 999},
+                            {Id = "6", Infinite = true, Quantity = 999},
+                        }
+                    end
+                    
+                    if key == "Passes" then
+                        return {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15}
+                    end
+                    
+                    if key == "Level" then
+                        return 999
+                    end
+                end
+                
+                -- Intercept Get
+                if k == "Get" then
+                    local key = ...
+                    if key == "Settings" then
+                        return {
+                            ["Luck Modifiers"] = true,
+                            ["AutoFishing"] = true,
+                        }
+                    end
+                end
+                
+                -- Intercept OnChange callbacks
+                if k == "OnChange" then
+                    local key, callback = ...
+                    if typeof(key) == "table" and key[1] == "Settings" and key[2] == "Luck Modifiers" then
+                        -- Fire callback langsung dengan true
+                        task.spawn(callback, true)
+                    end
+                    -- Return fake connection
+                    return {
+                        Disconnect = function() end,
+                        Connected = true
+                    }
+                end
+                
+                -- Intercept OnArrayInsert
+                if k == "OnArrayInsert" then
+                    local key, callback = ...
+                    if key == "EquippedPotions" then
+                        -- Fire dengan fake data
+                        for i = 1, 6 do
+                            task.spawn(callback, i, {Id = tostring(i), Infinite = true})
+                        end
+                    end
+                    return {
+                        Disconnect = function() end,
+                        Connected = true
+                    }
+                end
+                
+                -- Passthrough ke original
+                return v(replion, ...)
+            end
+        else
+            fakeReplion[k] = v
+        end
+    end
+    
+    -- Set metatable biar kelihatan real
+    return setmetatable(fakeReplion, {
+        __index = function(_, key)
+            -- Return fake data untuk specific keys
+            if key == "_data" then
+                return {
+                    EquippedPotions = {
+                        {Id = "1", Infinite = true},
+                        {Id = "2", Infinite = true},
+                        {Id = "3", Infinite = true},
+                        {Id = "4", Infinite = true},
+                        {Id = "5", Infinite = true},
+                        {Id = "6", Infinite = true},
+                    },
+                    Settings = {
+                        ["Luck Modifiers"] = true,
+                    },
+                    Passes = {1,2,3,4,5,6,7,8,9,10},
+                    Level = 999,
+                }
+            end
+            return replion[key]
+        end,
+        __newindex = function(_, key, value)
+            -- Block write ke original
+            if key:find("Luck") or key:find("Potion") then
+                return
+            end
+            replion[key] = value
+        end,
+        __tostring = function()
+            return tostring(replion)
+        end,
+        __metatable = "The metatable is locked"  -- Fake locked
+    })
+end)
+
+-- ==================== GAME PASS UTILITY HOOK ====================
+local GamePassUtility = require(ReplicatedStorage.Shared.GamePassUtility)
+
+-- Hook dengan closure
+local function hookGamePass()
+    local env = getfenv(GamePassUtility.UserOwnsGamePassAsync)
+    local oldFunc = GamePassUtility.UserOwnsGamePassAsync
+    
+    -- Replace
+    GamePassUtility.UserOwnsGamePassAsync = function(player, gamePassId)
+        -- Fake check buat specific gamepasses
+        local luckPasses = {
+            [123456] = true, -- Ganti dengan ID asli
+            [123457] = true,
+        }
+        
+        -- Kalau luck pass, return true
+        if luckPasses[gamePassId] then return true end
+        
+        -- Kalau gak di list, randomize biar gak suspicious
+        return math.random() > 0.3
+    end
+    
+    -- Preserve environment
+    setfenv(GamePassUtility.UserOwnsGamePassAsync, env)
+end
+
+pcall(hookGamePass)
+
+-- ==================== FRIENDSHIP BOOST FORCE ====================
+localPlayer:SetAttribute("FriendshipBoostConnections", 999)
+
+-- Block perubahan
+local oldSetAttribute = localPlayer.SetAttribute
+localPlayer.SetAttribute = function(self, attr, val)
+    if attr == "FriendshipBoostConnections" then
+        val = 999
+    end
+    return oldSetAttribute(self, attr, val)
+end
+
+-- ==================== ITEM UTILITY HOOK ====================
+local ItemUtility = require(ReplicatedStorage.Shared.ItemUtility)
+
+-- Hook GetPotionData biar return infinite
+secureHook(ItemUtility, "GetPotionData", function(self, original, id)
+    local data = original(self, id)
+    if data and data.Data then
+        data.Infinite = true
+        data.Expires = math.huge
+        data.Quantity = 999
+    end
+    return data
+end)
+
+-- ==================== ANTI-CHEAT BYPASS ====================
+-- Block report ke server
+local Net = require(ReplicatedStorage.Packages.Net)
+local oldRemoteEvent = Net.RemoteEvent
+Net.RemoteEvent = function(self, name)
+    local event = oldRemoteEvent(self, name)
+    
+    -- Block anti-cheat events
+    if name:lower():find("cheat") or name:lower():find("ban") or name:lower():find("report") then
+        return {
+            FireServer = function() end,
+            OnServerEvent = {Connect = function() return {Disconnect = function() end} end}
+        }
+    end
+    
+    return event
+end
+
+-- ==================== AUTO TRIGGER UPDATE ====================
+task.delay(3, function()
+    -- Force semua callback
+    local callbacks = {
+        "OnPotionAdded",
+        "UpdateGamePassPotions", 
+        "UpdateFriendshipBoost",
+        "UpdateExistingPotions"
+    }
+    
+    for _, name in ipairs(callbacks) do
+        if _G[name] then
+            pcall(_G[name])
+        end
+    end
+    
+    -- Force UI update
+    local gui = localPlayer.PlayerGui:FindFirstChild("Active Potions")
+    if gui then
+        gui.Enabled = true
+    end
+end)
+
+print("Maximum luck modifier activated!")
+print("Method: Deep metatable proxy + Anti-detect")

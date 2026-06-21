@@ -1,0 +1,810 @@
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local localPlayer = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+-- Load weapon system
+local v_u_6 = require(game.ReplicatedFirst.Variables)
+local v_u_3 = require(game.ReplicatedFirst.Ambassador)
+
+-- Config
+local config = {
+    enabled = true,
+    smooth = 5,
+    teamFilter = true,
+    wallCheck = true,
+    visibilityMethod = "Shapecast",
+    
+    -- FOV
+    fovEnabled = true,
+    fovSize = 35,
+    fovColor = Color3.fromRGB(109, 255, 11),
+    fovFilled = false,
+    fovTransparency = 0.9,
+    
+    -- ESP
+    espEnabled = true,
+    espBox = true,
+    espName = true,
+    espHealth = false,
+    espDistance = true,
+    espTracers = false,
+    espTeamColor = true,
+    espMaxDistance = 1000,
+    
+    -- Colors
+    espColor = Color3.fromRGB(255, 50, 50),
+    espTeamColor = Color3.fromRGB(50, 255, 50),
+    
+    -- WEAPON EXPLOIT
+    rapidFire = false,
+    noRecoil = false,
+    noSpread = false,
+    instantReload = false,
+    damageMultiplier = false,
+    triggerBot = false,
+}
+
+-- Detect
+local shapecastAvailable = pcall(function()
+    local testPart = Instance.new("Part")
+    workspace:Shapecast(testPart, Vector3.new(0, 1, 0))
+    testPart:Destroy()
+end)
+
+-- ESP
+local espObjects = {}
+
+-- FOV
+local fovCircle = Drawing.new("Circle")
+fovCircle.Visible = false
+fovCircle.Thickness = 1
+fovCircle.Color = config.fovColor
+fovCircle.Filled = config.fovFilled
+fovCircle.Transparency = config.fovTransparency
+fovCircle.NumSides = 64
+fovCircle.Radius = config.fovSize
+
+local Window = Rayfield:CreateWindow({
+    Name = "Esp+Aimbot",
+    LoadingTitle = "Loading...",
+    LoadingSubtitle = "Perbedaan membuat perbedaan",
+    ConfigurationSaving = { Enabled = false },
+    KeySystem = false,
+})
+
+local MainTab = Window:CreateTab("Aimbot", 4483362458)
+local FOVTab = Window:CreateTab("FOV", 4483362458)
+local ESPTab = Window:CreateTab("ESP", 4483362458)
+local VisualsTab = Window:CreateTab("Visuals", 4483362458)
+local WeaponTab = Window:CreateTab("Weapon", 4483362458)
+
+-- ==================== AIMBOT ====================
+MainTab:CreateToggle({
+    Name = "Enable Aimbot",
+    CurrentValue = false,
+    Callback = function(Value) config.enabled = Value end,
+})
+
+MainTab:CreateToggle({
+    Name = "Team Filter",
+    CurrentValue = true,
+    Callback = function(Value) config.teamFilter = Value end,
+})
+
+MainTab:CreateToggle({
+    Name = "Wall Check",
+    CurrentValue = true,
+    Callback = function(Value) config.wallCheck = Value end,
+})
+
+MainTab:CreateDropdown({
+    Name = "Visibility Method",
+    Options = {"Auto", "Shapecast", "RaycastMulti"},
+    CurrentOption = "Shapecast",
+    Callback = function(Value) config.visibilityMethod = Value end,
+})
+
+MainTab:CreateLabel("Detected: " .. (shapecastAvailable and "Shapecast" or "RaycastMulti"))
+
+MainTab:CreateSlider({
+    Name = "Smooth",
+    Range = {1, 100},
+    Increment = 1,
+    Suffix = "%",
+    CurrentValue = 12,
+    Callback = function(Value) config.smooth = Value / 100 end,
+})
+
+-- ==================== FOV ====================
+FOVTab:CreateToggle({
+    Name = "Show FOV Circle",
+    CurrentValue = true,
+    Callback = function(Value)
+        config.fovEnabled = Value
+        fovCircle.Visible = Value
+    end,
+})
+
+FOVTab:CreateToggle({
+    Name = "Filled FOV",
+    CurrentValue = false,
+    Callback = function(Value)
+        config.fovFilled = Value
+        fovCircle.Filled = Value
+    end,
+})
+
+FOVTab:CreateSlider({
+    Name = "FOV Size",
+    Range = {10, 500},
+    Increment = 5,
+    Suffix = " px",
+    CurrentValue = 35,
+    Callback = function(Value)
+        config.fovSize = Value
+        fovCircle.Radius = Value
+    end,
+})
+
+FOVTab:CreateSlider({
+    Name = "FOV Transparency",
+    Range = {0, 100},
+    Increment = 5,
+    Suffix = "%",
+    CurrentValue = 100,
+    Callback = function(Value)
+        config.fovTransparency = Value / 100
+        fovCircle.Transparency = Value / 100
+    end,
+})
+
+FOVTab:CreateColorPicker({
+    Name = "FOV Color",
+    Color = Color3.fromRGB(109, 255, 11),
+    Callback = function(Value)
+        config.fovColor = Value
+        fovCircle.Color = Value
+    end,
+})
+
+-- ==================== ESP ====================
+ESPTab:CreateToggle({
+    Name = "Enable ESP",
+    CurrentValue = true,
+    Callback = function(Value)
+        config.espEnabled = Value
+        if not Value then clearESP() end
+    end,
+})
+
+ESPTab:CreateToggle({
+    Name = "Box ESP",
+    CurrentValue = true,
+    Callback = function(Value) config.espBox = Value end,
+})
+
+ESPTab:CreateToggle({
+    Name = "Name ESP",
+    CurrentValue = false,
+    Callback = function(Value) config.espName = Value end,
+})
+
+ESPTab:CreateToggle({
+    Name = "Health ESP",
+    CurrentValue = false,
+    Callback = function(Value) config.espHealth = Value end,
+})
+
+ESPTab:CreateToggle({
+    Name = "Distance ESP",
+    CurrentValue = true,
+    Callback = function(Value) config.espDistance = Value end,
+})
+
+ESPTab:CreateToggle({
+    Name = "Tracers",
+    CurrentValue = false,
+    Callback = function(Value) config.espTracers = Value end,
+})
+
+ESPTab:CreateToggle({
+    Name = "Team Color",
+    CurrentValue = true,
+    Callback = function(Value) config.espTeamColor = Value end,
+})
+
+ESPTab:CreateSlider({
+    Name = "Max Distance",
+    Range = {100, 5000},
+    Increment = 100,
+    Suffix = " studs",
+    CurrentValue = 1000,
+    Callback = function(Value) config.espMaxDistance = Value end,
+})
+
+-- ==================== VISUALS ====================
+VisualsTab:CreateColorPicker({
+    Name = "Enemy Color",
+    Color = Color3.fromRGB(255, 50, 50),
+    Callback = function(Value) config.espColor = Value end,
+})
+
+VisualsTab:CreateColorPicker({
+    Name = "Team Color",
+    Color = Color3.fromRGB(50, 255, 50),
+    Callback = function(Value) config.espTeamColor = Value end,
+})
+
+-- ==================== WEAPON EXPLOIT ====================
+WeaponTab:CreateToggle({
+    Name = "Rapid Fire",
+    CurrentValue = false,
+    Callback = function(Value) config.rapidFire = Value end,
+})
+
+WeaponTab:CreateToggle({
+    Name = "No Recoil",
+    CurrentValue = false,
+    Callback = function(Value) config.noRecoil = Value end,
+})
+
+WeaponTab:CreateToggle({
+    Name = "No Spread",
+    CurrentValue = false,
+    Callback = function(Value) config.noSpread = Value end,
+})
+
+WeaponTab:CreateToggle({
+    Name = "Instant Reload",
+    CurrentValue = false,
+    Callback = function(Value) config.instantReload = Value end,
+})
+
+WeaponTab:CreateToggle({
+    Name = "Damage Multiplier",
+    CurrentValue = false,
+    Callback = function(Value) config.damageMultiplier = Value end,
+})
+
+WeaponTab:CreateToggle({
+    Name = "Trigger Bot",
+    CurrentValue = false,
+    Callback = function(Value) config.triggerBot = Value end,
+})
+
+-- ==================== FUNCTIONS ====================
+local function isSameTeam(player)
+    if not config.teamFilter then return false end
+    
+    if localPlayer.Team ~= nil and localPlayer.Team == player.Team then
+        return true
+    end
+    
+    local myTeamAttr = localPlayer:GetAttribute("Team")
+    local theirTeamAttr = player:GetAttribute("Team")
+    if myTeamAttr ~= nil and theirTeamAttr ~= nil and myTeamAttr == theirTeamAttr then
+        return true
+    end
+    
+    local myChar = localPlayer.Character
+    local theirChar = player.Character
+    if myChar and theirChar then
+        local myCharTeam = myChar:GetAttribute("Team")
+        local theirCharTeam = theirChar:GetAttribute("Team")
+        if myCharTeam ~= nil and theirCharTeam ~= nil and myCharTeam == theirCharTeam then
+            return true
+        end
+    end
+    
+    return false
+end
+
+local function getCharacterSize(character)
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return Vector3.new(4, 5, 2) end
+    
+    local min, max = Vector3.new(math.huge, math.huge, math.huge), Vector3.new(-math.huge, -math.huge, -math.huge)
+    for _, part in pairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            local pMin = part.Position - part.Size / 2
+            local pMax = part.Position + part.Size / 2
+            min = Vector3.new(math.min(min.X, pMin.X), math.min(min.Y, pMin.Y), math.min(min.Z, pMin.Z))
+            max = Vector3.new(math.max(max.X, pMax.X), math.max(max.Y, pMax.Y), math.max(max.Z, pMax.Z))
+        end
+    end
+    
+    return max - min
+end
+
+local function createESP(player)
+    if player == localPlayer then return end
+    if espObjects[player] then return end
+    
+    local objects = {}
+    
+    if config.espBox then
+        for i = 1, 4 do
+            local line = Drawing.new("Line")
+            line.Visible = false
+            line.Thickness = 1.5
+            line.Transparency = 1
+            table.insert(objects, {type = "box", obj = line})
+        end
+    end
+    
+    if config.espName then
+        local nameText = Drawing.new("Text")
+        nameText.Visible = false
+        nameText.Size = 14
+        nameText.Center = true
+        nameText.Outline = true
+        nameText.OutlineColor = Color3.new(0, 0, 0)
+        nameText.Font = Drawing.Fonts.UI
+        table.insert(objects, {type = "name", obj = nameText})
+    end
+    
+    if config.espHealth then
+        local healthText = Drawing.new("Text")
+        healthText.Visible = false
+        healthText.Size = 12
+        healthText.Center = true
+        healthText.Outline = true
+        healthText.OutlineColor = Color3.new(0, 0, 0)
+        healthText.Font = Drawing.Fonts.UI
+        table.insert(objects, {type = "health", obj = healthText})
+        
+        local healthBarBg = Drawing.new("Square")
+        healthBarBg.Visible = false
+        healthBarBg.Filled = true
+        healthBarBg.Color = Color3.new(0, 0, 0)
+        table.insert(objects, {type = "healthbar_bg", obj = healthBarBg})
+        
+        local healthBar = Drawing.new("Square")
+        healthBar.Visible = false
+        healthBar.Filled = true
+        table.insert(objects, {type = "healthbar", obj = healthBar})
+    end
+    
+    if config.espDistance then
+        local distText = Drawing.new("Text")
+        distText.Visible = false
+        distText.Size = 12
+        distText.Center = true
+        distText.Outline = true
+        distText.OutlineColor = Color3.new(0, 0, 0)
+        distText.Font = Drawing.Fonts.UI
+        table.insert(objects, {type = "distance", obj = distText})
+    end
+    
+    if config.espTracers then
+        local tracer = Drawing.new("Line")
+        tracer.Visible = false
+        tracer.Thickness = 1
+        tracer.Transparency = 0.7
+        table.insert(objects, {type = "tracer", obj = tracer})
+    end
+    
+    espObjects[player] = objects
+end
+
+local function removeESP(player)
+    if not espObjects[player] then return end
+    for _, item in ipairs(espObjects[player]) do
+        if item.obj then item.obj:Remove() end
+    end
+    espObjects[player] = nil
+end
+
+function clearESP()
+    for player, objects in pairs(espObjects) do
+        for _, item in ipairs(objects) do
+            if item.obj then item.obj:Remove() end
+        end
+    end
+    espObjects = {}
+end
+
+-- FIX: ESP visibility bug - recreate kalau character respawn
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
+        if espObjects[player] then removeESP(player) end
+        createESP(player)
+    end)
+    player.CharacterRemoving:Connect(function()
+        if espObjects[player] then
+            for _, item in ipairs(espObjects[player]) do
+                item.obj.Visible = false
+            end
+        end
+    end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    removeESP(player)
+end)
+
+for _, player in ipairs(Players:GetPlayers()) do
+    if player ~= localPlayer then createESP(player) end
+end
+
+local function updateESP()
+    if not config.espEnabled then
+        for _, objects in pairs(espObjects) do
+            for _, item in ipairs(objects) do
+                item.obj.Visible = false
+            end
+        end
+        return
+    end
+    
+    for player, objects in pairs(espObjects) do
+        -- FIX: Cek player valid
+        if not player or not player.Parent then
+            for _, item in ipairs(objects) do item.obj.Visible = false end
+            continue
+        end
+        
+        local character = player.Character
+        local humanoid = character and character:FindFirstChild("Humanoid")
+        local hrp = character and character:FindFirstChild("HumanoidRootPart")
+        
+        if not character or not humanoid or not hrp or humanoid.Health <= 0 then
+            for _, item in ipairs(objects) do item.obj.Visible = false end
+            continue
+        end
+        
+        local pos = hrp.Position
+        local screenPos, onScreen = camera:WorldToViewportPoint(pos)
+        local distance = (pos - camera.CFrame.Position).Magnitude
+        
+        if not onScreen or distance > config.espMaxDistance then
+            for _, item in ipairs(objects) do item.obj.Visible = false end
+            continue
+        end
+        
+        local isTeammate = isSameTeam(player)
+        local color = (isTeammate and config.espTeamColor) and config.espTeamColor or config.espColor
+        
+        local size = getCharacterSize(character)
+        local top = camera:WorldToViewportPoint(pos + Vector3.new(0, size.Y / 2, 0))
+        local bottom = camera:WorldToViewportPoint(pos - Vector3.new(0, size.Y / 2, 0))
+        local height = math.abs(top.Y - bottom.Y)
+        local width = height * 0.6
+        
+        local boxTopLeft = Vector2.new(screenPos.X - width / 2, top.Y)
+        local boxTopRight = Vector2.new(screenPos.X + width / 2, top.Y)
+        local boxBottomLeft = Vector2.new(screenPos.X - width / 2, bottom.Y)
+        local boxBottomRight = Vector2.new(screenPos.X + width / 2, bottom.Y)
+        
+        for _, item in ipairs(objects) do
+            if item.type == "box" and config.espBox then
+                local lines = {}
+                for _, obj in ipairs(objects) do
+                    if obj.type == "box" then table.insert(lines, obj.obj) end
+                end
+                
+                lines[1].From = boxTopLeft; lines[1].To = boxTopRight
+                lines[2].From = boxTopRight; lines[2].To = boxBottomRight
+                lines[3].From = boxBottomRight; lines[3].To = boxBottomLeft
+                lines[4].From = boxBottomLeft; lines[4].To = boxTopLeft
+                
+                for _, line in ipairs(lines) do
+                    line.Color = color
+                    line.Visible = true
+                end
+                
+            elseif item.type == "name" and config.espName then
+                item.obj.Text = player.Name
+                item.obj.Position = Vector2.new(screenPos.X, boxTopLeft.Y - 20)
+                item.obj.Color = color
+                item.obj.Visible = true
+                
+            elseif item.type == "health" and config.espHealth then
+                local healthPercent = humanoid.Health / humanoid.MaxHealth
+                item.obj.Text = math.floor(humanoid.Health) .. "/" .. math.floor(humanoid.MaxHealth)
+                item.obj.Position = Vector2.new(screenPos.X, boxBottomLeft.Y + 5)
+                item.obj.Color = Color3.fromRGB(255 - (healthPercent * 255), healthPercent * 255, 0)
+                item.obj.Visible = true
+                
+            elseif item.type == "healthbar_bg" and config.espHealth then
+                item.obj.Size = Vector2.new(width + 4, 6)
+                item.obj.Position = Vector2.new(boxTopLeft.X - 2, boxTopLeft.Y - 10)
+                item.obj.Visible = true
+                
+            elseif item.type == "healthbar" and config.espHealth then
+                local healthPercent = humanoid.Health / humanoid.MaxHealth
+                item.obj.Size = Vector2.new((width + 4) * healthPercent, 6)
+                item.obj.Position = Vector2.new(boxTopLeft.X - 2, boxTopLeft.Y - 10)
+                item.obj.Color = Color3.fromRGB(255 - (healthPercent * 255), healthPercent * 255, 0)
+                item.obj.Visible = true
+                
+            elseif item.type == "distance" and config.espDistance then
+                item.obj.Text = math.floor(distance) .. "m"
+                item.obj.Position = Vector2.new(screenPos.X, boxBottomLeft.Y + 20)
+                item.obj.Color = color
+                item.obj.Visible = true
+                
+            elseif item.type == "tracer" and config.espTracers then
+                item.obj.From = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y)
+                item.obj.To = Vector2.new(screenPos.X, screenPos.Y)
+                item.obj.Color = color
+                item.obj.Visible = true
+            end
+        end
+    end
+end
+
+-- ==================== AIMBOT ====================
+local PRIORITY_PARTS = {"Head", "UpperTorso", "Torso", "HumanoidRootPart"}
+
+local raycastParams = RaycastParams.new()
+raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+
+local function updateRaycastFilter()
+    local filterList = {}
+    if localPlayer.Character then
+        table.insert(filterList, localPlayer.Character)
+    end
+    raycastParams.FilterDescendantsInstances = filterList
+end
+
+local function shapecastVisibility(part, character)
+    if not part then return false, nil end
+    local direction = part.Position - camera.CFrame.Position
+    updateRaycastFilter()
+    
+    local result = workspace:Shapecast(part, direction, raycastParams)
+    if not result then return true, part.Position end
+    if result.Instance:IsDescendantOf(character) then return true, result.Position end
+    return false, nil
+end
+
+local function isPointVisible(point, character)
+    local origin = camera.CFrame.Position
+    local direction = point - origin
+    updateRaycastFilter()
+    
+    local result = workspace:Raycast(origin, direction, raycastParams)
+    if not result then return true, point end
+    if result.Instance:IsDescendantOf(character) then return true, point end
+    return false, nil
+end
+
+local function raycastMultiVisibility(part, character)
+    if not part then return false, nil end
+    local origin = camera.CFrame.Position
+    local partCF = part.CFrame
+    local partSize = part.Size
+    
+    local checkPoints = {
+        part.Position,
+        partCF:PointToWorldSpace(Vector3.new(0, -partSize.Y/3, 0)),
+        partCF:PointToWorldSpace(Vector3.new(0, partSize.Y/3, 0)),
+        partCF:PointToWorldSpace(Vector3.new(partSize.X/3, 0, 0)),
+        partCF:PointToWorldSpace(Vector3.new(-partSize.X/3, 0, 0)),
+        partCF:PointToWorldSpace(Vector3.new(0, 0, partSize.Z/3)),
+        partCF:PointToWorldSpace(Vector3.new(0, 0, -partSize.Z/3)),
+    }
+    
+    for _, checkPos in ipairs(checkPoints) do
+        local visible, aimPoint = isPointVisible(checkPos, character)
+        if visible then return true, aimPoint end
+    end
+    return false, nil
+end
+
+local function getVisiblePartWithPoint(character)
+    if not config.wallCheck then
+        for _, partName in ipairs(PRIORITY_PARTS) do
+            local part = character:FindFirstChild(partName)
+            if part then return part, part.Position end
+        end
+        return nil, nil
+    end
+    
+    local method = config.visibilityMethod
+    if method == "Auto" then
+        method = shapecastAvailable and "Shapecast" or "RaycastMulti"
+    end
+    
+    for _, partName in ipairs(PRIORITY_PARTS) do
+        local part = character:FindFirstChild(partName)
+        if not part then continue end
+        
+        local isVisible, aimPoint
+        if method == "Shapecast" and shapecastAvailable then
+            isVisible, aimPoint = shapecastVisibility(part, character)
+        else
+            isVisible, aimPoint = raycastMultiVisibility(part, character)
+        end
+        
+        if isVisible and aimPoint then return part, aimPoint end
+    end
+    return nil, nil
+end
+
+local function getNearestTarget()
+    local best = nil
+    local bestDist = math.huge
+    local bestAimPoint = nil
+    local center = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == localPlayer then continue end
+        if isSameTeam(player) then continue end
+
+        local char = player.Character
+        if not char then continue end
+        local humanoid = char:FindFirstChild("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then continue end
+        local root = char:FindFirstChild("HumanoidRootPart")
+        if not root then continue end
+
+        local screenPos, onScreen = camera:WorldToViewportPoint(root.Position)
+        if not onScreen then continue end
+
+        local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+        if screenDist > config.fovSize then continue end
+
+        local visiblePart, aimPoint = getVisiblePartWithPoint(char)
+        if config.wallCheck and (not visiblePart or not aimPoint) then continue end
+
+        if screenDist < bestDist then
+            bestDist = screenDist
+            best = player
+            bestAimPoint = aimPoint
+        end
+    end
+
+    if not best then return nil, nil end
+    return best, bestAimPoint
+end
+
+-- ==================== WEAPON EXPLOIT SYSTEM ====================
+
+-- No Recoil + No Spread
+RunService.RenderStepped:Connect(function()
+    if config.noRecoil then
+        if v_u_6.camRecoilSpring then
+            v_u_6.camRecoilSpring.p = Vector3.new(0, 0, 0)
+            v_u_6.camRecoilSpring.v = Vector3.new(0, 0, 0)
+        end
+        if v_u_6.gunRecoilSpring2 then
+            v_u_6.gunRecoilSpring2.p = Vector3.new(0, 0, 0)
+            v_u_6.gunRecoilSpring2.v = Vector3.new(0, 0, 0)
+        end
+    end
+    
+    if config.noSpread then
+        -- Reset spread globals
+        local env = getfenv()
+        if env.v_u_20 then env.v_u_20 = 0 end
+        if env.v_u_22 then env.v_u_22 = 0 end
+        if env.v_u_26 then env.v_u_26 = 0 end
+    end
+end)
+
+-- Rapid Fire + Instant Reload
+task.spawn(function()
+    while task.wait(0.05) do
+        if config.rapidFire then
+            -- Set semua weapon fire rate ke 0
+            local weapons = game.ReplicatedStorage:FindFirstChild("Weapons")
+            if weapons then
+                for _, weapon in ipairs(weapons:GetChildren()) do
+                    if weapon:GetAttribute("FireRate") then
+                        weapon:SetAttribute("FireRate", 0.01)
+                    end
+                    if weapon:GetAttribute("Cooldown") then
+                        weapon:SetAttribute("Cooldown", 0.01)
+                    end
+                    if weapon:GetAttribute("Burst") then
+                        weapon:SetAttribute("Burst", 0.01)
+                    end
+                end
+            end
+            
+            -- Bypass lastfired check
+            local env = getfenv()
+            local v_u_30 = env.v_u_30
+            local v_u_27 = env.v_u_27
+            if v_u_30 and v_u_27 and v_u_30[v_u_27] then
+                v_u_30[v_u_27].lastfired = 0
+            end
+        end
+        
+        if config.instantReload then
+            local env = getfenv()
+            local v_u_30 = env.v_u_30
+            local v_u_27 = env.v_u_27
+            if v_u_30 and v_u_27 and v_u_30[v_u_27] then
+                local weapon = env.GI and env.GI(v_u_27)
+                if weapon then
+                    local maxAmmo = weapon:GetAttribute("Ammo") or 30
+                    v_u_30[v_u_27].Ammo = maxAmmo
+                    v_u_30[v_u_27].StoredAmmo = 999
+                    v_u_30[v_u_27].Reloading = nil
+                end
+            end
+            
+            -- Force reload flag false
+            local v_u_29 = env.v_u_29
+            if v_u_29 ~= nil then
+                env.v_u_29 = false
+            end
+        end
+    end
+end)
+
+-- Damage Multiplier (hook activateresult)
+local v_u_8 = require(game.ReplicatedStorage.Modules.Shucky)
+if v_u_8 and v_u_8.activateresult then
+    local oldActivate = v_u_8.activateresult
+    v_u_8.activateresult = function(hits, weapon, ...)
+        if config.damageMultiplier then
+            for _, hit in ipairs(hits) do
+                if hit.Hit and hit.Hit.Parent then
+                    local humanoid = hit.Hit.Parent:FindFirstChild("Humanoid")
+                    if humanoid then
+                        -- Force headshot damage / instant kill
+                        hit.Backstab = true
+                        -- Atau modif di server event
+                    end
+                end
+            end
+        end
+        return oldActivate(hits, weapon, ...)
+    end
+end
+
+-- Trigger Bot (No Delay)
+RunService.RenderStepped:Connect(function()
+    if not config.triggerBot then
+        v_u_6.mouse1 = false
+        v_u_3.Fire("CheckMouse1", false)
+        return
+    end
+    
+    local target, aimPoint = getNearestTarget()
+    if target and aimPoint then
+        v_u_6.mouse1 = true
+        v_u_3.Fire("CheckMouse1", true)
+    else
+        v_u_6.mouse1 = false
+        v_u_3.Fire("CheckMouse1", false)
+    end
+end)
+
+-- ==================== MAIN LOOP ====================
+RunService.RenderStepped:Connect(function()
+    -- Update FOV
+    if config.fovEnabled then
+        fovCircle.Position = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+        fovCircle.Visible = true
+        fovCircle.Color = config.fovColor
+    else
+        fovCircle.Visible = false
+    end
+    
+    -- Update ESP
+    updateESP()
+    
+    -- Aimbot
+    if not config.enabled then return end
+    local target, aimPoint = getNearestTarget()
+    if not target or not aimPoint then return end
+    
+    local targetCFrame = CFrame.lookAt(camera.CFrame.Position, aimPoint)
+    camera.CFrame = camera.CFrame:Lerp(targetCFrame, config.smooth)
+end)
+
+-- Notify
+Rayfield:Notify({
+    Title = "Loaded",
+    Content = "Shapecast " .. (shapecastAvailable and "Active" or "Unavailable"),
+    Duration = 3,
+    Image = 4483362458,
+})
