@@ -1,1 +1,40 @@
-anu mas habis tokennya
+local executorName = (identifyexecutor and identifyexecutor() or "Unknown")
+local currentPlaceID = game.PlaceId
+local currentUniverseID = game.GameId
+
+local games = {
+       [5750914919] = "https://raw.githubusercontent.com/Asep-gabut/Gabut/refs/heads/main/ITIL", --Fisch
+       [6993600665] = "https://raw.githubusercontent.com/Asep-gabut/Gabut/refs/heads/main/esp", --defusal
+       [6701277882] = "https://raw.githubusercontent.com/Asep-gabut/Gabut/refs/heads/main/luck%20fish%20it", --Fish it
+       [7629331599] = "https://raw.githubusercontent.com/Asep-gabut/Gabut/refs/heads/main/prospek", --prospecting
+}
+
+local scriptURL = games[currentUniverseID] or games[currentPlaceID]
+
+if scriptURL then
+    print("========================================")
+    print("  APA KAU")
+    print("  Executor: " .. tostring(executorName))
+    print("  Loading script for ID: " .. (games[currentUniverseID] and "Universe (" .. tostring(currentUniverseID) .. ")" or "Place (" .. tostring(currentPlaceID) .. ")"))
+    print("  URL: " .. scriptURL)
+    print("========================================")
+
+    local success, err = pcall(function()
+        loadstring(game:HttpGet(scriptURL))()
+    end)
+
+    if not success then
+        warn(" Coba lagi " .. tostring(err))
+    end
+else
+    local msg = "\n========================================\n" ..
+                "         Map not supported yet!\n" ..
+                "========================================\n" ..
+                "  Executor: " .. tostring(executorName) .. "\n" ..
+                "  PlaceId: " .. tostring(currentPlaceID) .. "\n" ..
+                "  UniverseId: " .. tostring(currentUniverseID) .. "\n" ..
+                "========================================\n"
+
+    warn(msg)
+    game.Players.LocalPlayer:Kick(msg)
+end
