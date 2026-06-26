@@ -1,0 +1,58 @@
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local plr = Players.LocalPlayer
+local ITEM_NAMES = {
+    "All Season Potion",
+    "Glitched Potion", 
+    "Luck Potion",
+    "Lure Speed Potion",
+}
+
+local claimEvent = ReplicatedStorage.packages.Net["RE/PersonalAquarium/ClaimRewards"]
+
+task.spawn(function()
+    while true do
+        pcall(function()
+            claimEvent:FireServer()
+        end)
+        task.wait(60)
+    end
+end)
+
+local function getTool(name)
+    local backpack = plr:FindFirstChild("Backpack")
+    if backpack then
+        for _, t in ipairs(backpack:GetChildren()) do
+            if t.Name == name and t:IsA("Tool") then
+                return t
+            end
+        end
+    end
+    return nil
+end
+
+task.spawn(function()
+    while true do
+        for _, itemName in ipairs(ITEM_NAMES) do
+            local tool = getTool(itemName)
+            if tool then
+                local hum = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
+                if hum then
+                    hum:EquipTool(tool)
+                    task.wait(0.2)
+                    
+                    pcall(function()
+                        tool:Activate()
+                    end)
+                    task.wait(0.2)
+                    
+                    hum:UnequipTools()
+                    task.wait(0.2)
+                end
+            end
+            task.wait(0.1)
+        end
+        task.wait(30)
+    end
+end)
