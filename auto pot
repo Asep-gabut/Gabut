@@ -37,7 +37,7 @@ task.spawn(function()
     while true do
         for _, itemName in ipairs(ITEM_NAMES) do
             local tool = getTool(itemName)
-            local rod = Shady Rod
+            local rod = getTool("Shady Rod")
             if tool then
                 local hum = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
                 if hum then
