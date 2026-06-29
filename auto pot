@@ -9,6 +9,8 @@ local ITEM_NAMES = {
     "Lure Speed Potion",
 }
 
+b = 20
+
 local claimEvent = ReplicatedStorage.packages.Net["RE/PersonalAquarium/ClaimRewards"]
 
 task.spawn(function()
@@ -33,7 +35,7 @@ local function getTool(name)
 end
 
 task.spawn(function()
-    while true do
+    for s, b do
         for _, itemName in ipairs(ITEM_NAMES) do
             local tool = getTool(itemName)
             if tool then
@@ -53,6 +55,6 @@ task.spawn(function()
             end
             task.wait(0.1)
         end
-        task.wait(30)
+        task.wait(1)
     end
 end)
