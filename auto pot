@@ -60,7 +60,7 @@ end)
 
 task.spawn(function()
     while true do
-      local Rod = getTool("Flimsy Rod")
+      local Rod = getTool("Shady Rod")
       if Rod then
           local xim = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
           if xim then
