@@ -57,6 +57,12 @@ task.spawn(function()
             end
             task.wait(0.1)
         end
+           local rod = getTool("Shady Rod")
+            if rod and hum then
+             pcall(function()
+              hum:EquipTool(rod)
+             end)
+            end
         task.wait(60)
     end
 end)
