@@ -54,12 +54,16 @@ task.spawn(function()
             end
             task.wait(0.1)
         end
-        local rod = getTool("Flimsy Rod")
-        if rod and hum then
-            pcall(function()
-                hum:EquipTool(rod)
-            end)
-        end
         task.wait(60)
+    end
+end)
+
+task.spawn(function()
+    while true do
+      local Rod = getTool("Flimsy Rod")
+      if Rod then
+          local xim = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
+          if xim then
+              xim:EquipTool(Rod)
     end
 end)
