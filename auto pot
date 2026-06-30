@@ -64,7 +64,7 @@ task.spawn(function()
           local xim = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
           if xim then
               pcall(function()
-                  xim:EquipTool(rod)
+                  xim:EquipTool(Rod)
               end)
           end
           task.wait(5)
