@@ -56,8 +56,8 @@ task.spawn(function()
         end
         local rod = getTool("Flimsy Rod")
         if rod and hum then
-          pcall(function()
-           hum:EquipTool(rod)
+            pcall(function()
+             hum:EquipTool(rod)
           end)
          end
         task.wait(60)
