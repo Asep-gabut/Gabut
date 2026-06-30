@@ -37,7 +37,6 @@ task.spawn(function()
     while true do
         for _, itemName in ipairs(ITEM_NAMES) do
             local tool = getTool(itemName)
-            local rod = getTool("Flimsy Rod")
             if tool then
                 local hum = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
                 if hum then
@@ -51,13 +50,11 @@ task.spawn(function()
                     
                     hum:UnequipTools()
                     task.wait(0.2)
-                    
-                    hum:EquipTool(rod)
                 end
             end
             task.wait(0.1)
         end
-        local rod = getTool("Shady Rod")
+        local rod = getTool("Flimsy Rod")
         if rod and hum then
           pcall(function()
            hum:EquipTool(rod)
