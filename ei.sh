@@ -122,20 +122,29 @@ launch() {
     local pkg="$1"
     local url="$2"
     local name="$3"
+    
     log "[$name] Launching $pkg..."
-    kill_pkg "$pkg"
-    sleep 2
-    su -c "am start -a android.intent.action.VIEW -d '$url' -p $pkg" >/dev/null 2>&1
-    sleep 12
+    
     if is_running "$pkg"; then
-        log "[$name] ✅ Launched"
+        log "[$name] Already running"
+        return 0
+    fi
+    
+    su -c "am start -a android.intent.action.VIEW -d '$url' -p $pkg" >/dev/null 2>&1
+    sleep 15
+    
+    # Cek PID + cek activity stack
+    local pid
+    pid=$(su -c "pidof $pkg" 2>/dev/null)
+    local activity
+    activity=$(su -c "dumpsys activity activities | grep '$pkg' | head -1" 2>/dev/null)
+    
+    if [[ -n "$pid" && -n "$activity" ]]; then
+        log "[$name] ✅ Launched (PID: $pid)"
         return 0
     else
-        log "[$name] ❌ Failed, retrying..."
-        sleep 10
-        su -c "am start -a android.intent.action.VIEW -d '$url' -p $pkg" >/dev/null 2>&1
-        sleep 10
-        is_running "$pkg" && log "[$name] ✅ Retry OK" || log "[$name] ❌ Retry failed"
+        log "[$name] ❌ Failed (PID: ${pid:-none}, Activity: ${activity:-none})"
+        return 1
     fi
 }
 
