@@ -81,9 +81,13 @@ save_state() {
 
 is_running() {
     local pkg="$1"
-    # Cek process ada + activity running (bukan finishing/crashing)
-    su -c "ps -A | grep -q '$pkg'" 2>/dev/null && \
-    su -c "dumpsys activity activities | grep -E '$pkg.*Record' | grep -qv ' finishing'" 2>/dev/null
+    local pid
+    pid=$(su -c "pidof $pkg" 2>/dev/null)
+    [[ -z "$pid" ]] && return 1
+    local state
+    state=$(su -c "cat /proc/$pid/stat 2>/dev/null | awk '{print \$3}'")
+    [[ "$state" == "Z" ]] && return 1
+    su -c "dumpsys window windows | grep -q '$pkg'" 2>/dev/null
 }
 
 is_frozen() {
@@ -173,6 +177,13 @@ process_instance() {
     local today=$(date +%Y%m%d)
     local today_key="day_${idx}_${today}"
     local today_restarts="${INSTANCE_STATE[$today_key]:-0}"
+    local grace_key="grace_${idx}"
+    local grace_until="${INSTANCE_STATE[$grace_key]:-0}"
+
+    # Skip cek kalau masih dalam grace period
+    if (( now_epoch < grace_until )); then
+        return
+    fi
 
     if ! is_running "$pkg"; then
         log "[$name] 💀 Crash/mati!"
@@ -183,6 +194,7 @@ process_instance() {
         fi
         discord_send "💀 Crash" "**$name** crash. Restarting..." 16711680 "$(take_screenshot)"
         launch "$pkg" "$url" "$name"
+        INSTANCE_STATE["$grace_key"]="$((now_epoch + 30))"
         ((restarts++)); ((today_restarts++))
         INSTANCE_STATE["$idx"]="$now_epoch|$restarts|$now_epoch|$uptime"
         INSTANCE_STATE["$today_key"]="$today_restarts"
