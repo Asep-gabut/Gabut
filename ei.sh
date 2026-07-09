@@ -5,7 +5,7 @@ INSTANCES=(
    "free.nokaB|https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&type=Server|Bot2"
 )
 
-CHECK_INTERVAL="2"
+CHECK_INTERVAL="10"
 CACHE_INTERVAL="3600"
 FREEZE_THRESHOLD="60"
 MAX_RESTARTS="50"
