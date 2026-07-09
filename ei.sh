@@ -84,11 +84,18 @@ is_running() {
     local pid
     pid=$(su -c "pidof $pkg" 2>/dev/null)
     [[ -z "$pid" ]] && return 1
+    
+    # Cek PID bukan zombie
     for p in $pid; do
         local state
         state=$(su -c "cat /proc/$p/stat 2>/dev/null | awk '{print \$3}'")
         [[ "$state" == "Z" ]] && continue
-        [[ -d "/proc/$p" ]] && return 0
+        [[ -d "/proc/$p" ]] || continue
+        
+        # Cek ada activity foreground/background
+        local activity
+        activity=$(su -c "dumpsys activity activities | grep -E '$pkg.*(Resumed|Paused|Started)' | head -1" 2>/dev/null)
+        [[ -n "$activity" ]] && return 0
     done
     return 1
 }
