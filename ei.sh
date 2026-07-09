@@ -127,7 +127,15 @@ is_frozen() {
 launch() {
     local pkg="$1"
     local url="$2"
+    local name="$3"
+    
+    log "[$name] Launching $pkg..."
     su -c "am start -a android.intent.action.VIEW -d '$url' -p $pkg" >/dev/null 2>&1
+    
+    # Delay biar Roblox kebuka & loading
+    sleep 20
+    
+    log "[$name] ✅ Launched (waited 20s)"
 }
 
 kill_pkg() {
@@ -277,16 +285,17 @@ if [[ "$1" == "--daemon" ]]; then
         log "   📦 $name → $pkg"
     done
     
-    while true; do
-        local i=0
-        for line in "${INSTANCES[@]}"; do
-            process_instance "$i" "$line"
-            ((i++))
-        done
-        save_state
-        sleep "$CHECK_INTERVAL"
+while true; do
+    local i=0
+    for line in "${INSTANCES[@]}"; do
+        process_instance "$i" "$line"
+        ((i++))
+        # Delay antar instance (kecuali yang terakhir)
+        (( i < ${#INSTANCES[@]} )) && sleep 5
     done
-    
+    save_state
+    sleep "$CHECK_INTERVAL"
+done    
     exit 0
 fi
 
