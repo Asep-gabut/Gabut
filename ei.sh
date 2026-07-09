@@ -5,13 +5,13 @@
 # ═══════════════════════════════════════════════════════════════════════
 
 INSTANCES=(
-    "com.roblox.client|roblox://placeID=PLACE_ID&linkCode=CODE|Main"
-    # "com.roblox.client2|roblox://placeID=PLACE_ID&linkCode=CODE2|Alt1"
+   "free.nokaA|https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&type=Server|Bot1"
+   "free.nokaB|https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&type=Server|Bot2"
 )
 
 CHECK_INTERVAL="5"
 CACHE_INTERVAL="3600"
-FREEZE_THRESHOLD="30"
+FREEZE_THRESHOLD="60"
 MAX_RESTARTS="50"
 
 DISCORD_WEBHOOK="https://discord.com/api/webhooks/1483451715104804964/o0vgYLS-zg4WUXHQM-GiaT0idCfzz-bqPAqRXi4ME0xjEQusxdA3zmEdRQIzUiHovOb3"
@@ -38,12 +38,12 @@ discord_send() {
     local description="$2"
     local color="$3"
     local image_path="$4"
-
+    
     [[ -z "$DISCORD_WEBHOOK" ]] && return
-
+    
     local ping=""
     [[ -n "$DISCORD_PING_USER" ]] && ping="<@$DISCORD_PING_USER> "
-
+    
     if [[ -n "$image_path" && -f "$image_path" ]]; then
         local boundary="----BotBoundary$(date +%s)"
         {
@@ -100,17 +100,17 @@ is_frozen() {
     local pid
     pid=$(su -c "pidof $pkg" 2>/dev/null)
     [[ -z "$pid" ]] && return 1
-
+    
     local stat_file="/proc/$pid/stat"
     [[ ! -f "$stat_file" ]] && return 1
-
+    
     local cpu_time
     cpu_time=$(su -c "cat $stat_file" 2>/dev/null | awk '{print $14+$15}')
     [[ -z "$cpu_time" ]] && return 1
-
+    
     local cache_key="cpu_${pkg}"
     local last_cpu="${INSTANCE_STATE[$cache_key]:-0}"
-
+    
     if [[ "$last_cpu" == "$cpu_time" ]]; then
         local frozen_since="${INSTANCE_STATE[${cache_key}_time]:-$(( $(date +%s) - FREEZE_THRESHOLD - 1 ))}"
         local now=$(date +%s)
@@ -141,62 +141,62 @@ clear_cache() {
 process_instance() {
     local idx="$1"
     local line="$2"
-
+    
     IFS='|' read -r pkg url name <<< "$line"
-
+    
     local state="${INSTANCE_STATE[$idx]:-0|0|0|0}"
     local last_cache restarts last_restart uptime
     IFS='|' read -r last_cache restarts last_restart uptime <<< "$state"
-
+    
     local now_epoch=$(date +%s)
     local today=$(date +%Y%m%d)
     local today_key="day_${idx}_${today}"
     local today_restarts="${INSTANCE_STATE[$today_key]:-0}"
-
+    
     if is_frozen "$pkg"; then
         log "[$name] 🥶 FROZEN/ANR detected!"
         discord_send "🥶 Instance Frozen" "**$name** \`$pkg\` freeze/ANR terdeteksi. Restarting..." 16711680 "$(take_screenshot)"
-
+        
         kill_pkg "$pkg"
         sleep 2
         clear_cache "$pkg"
         sleep 0.5
         launch "$pkg" "$url"
-
+        
         ((restarts++))
         ((today_restarts++))
         INSTANCE_STATE["$idx"]="$now_epoch|$restarts|$now_epoch|$uptime"
         INSTANCE_STATE["$today_key"]="$today_restarts"
         save_state
-
+        
         log "[$name] 🚀 Restarted after freeze (total: $restarts, today: $today_restarts)"
         discord_send "🚀 Instance Restarted" "**$name** \`$pkg\` restart setelah freeze. Total restart: $restarts" 3066993
         sleep 10
         return
     fi
-
+    
     if ! is_running "$pkg"; then
         log "[$name] 💀 Crash/mati detected!"
         discord_send "💀 Instance Crash" "**$name** \`$pkg\` crash/mati. Restarting..." 16711680 "$(take_screenshot)"
-
+        
         kill_pkg "$pkg"
         sleep 1
         clear_cache "$pkg"
         sleep 0.5
         launch "$pkg" "$url"
-
+        
         ((restarts++))
         ((today_restarts++))
         INSTANCE_STATE["$idx"]="$now_epoch|$restarts|$now_epoch|$uptime"
         INSTANCE_STATE["$today_key"]="$today_restarts"
         save_state
-
+        
         log "[$name] 🚀 Restarted after crash (total: $restarts, today: $today_restarts)"
         discord_send "🚀 Instance Restarted" "**$name** \`$pkg\` restart setelah crash. Total restart: $restarts" 3066993
         sleep 10
         return
     fi
-
+    
     if (( today_restarts >= MAX_RESTARTS )); then
         log "[$name] ⚠️ MAX RESTARTS ($MAX_RESTARTS) reached today! Instance di-skip."
         discord_send "⚠️ Max Restarts Reached" "**$name** \`$pkg\` udah restart $today_restarts kali hari ini. Bot skip instance ini biar ga infinite loop." 15158332
@@ -204,25 +204,25 @@ process_instance() {
         save_state
         return
     fi
-
+    
     if [[ "$CACHE_INTERVAL" != "0" ]] && (( now_epoch - last_cache >= CACHE_INTERVAL )); then
         log "[$name] 🧹 Auto clear cache..."
         discord_send "🧹 Auto Cache Clear" "**$name** \`$pkg\` cache di-clear otomatis." 3447003
-
+        
         kill_pkg "$pkg"
         sleep 1
         clear_cache "$pkg"
         launch "$pkg" "$url"
-
+        
         INSTANCE_STATE["$idx"]="$now_epoch|$restarts|$last_restart|$uptime"
         save_state
-
+        
         log "[$name] ✅ Cache cleared & relaunched"
         discord_send "🚀 Cache Cleared & Restarted" "**$name** \`$pkg\` berhasil restart setelah cache clear." 3066993
         sleep 10
         return
     fi
-
+    
     if (( last_restart > 0 )); then
         INSTANCE_STATE["$idx"]="$last_cache|$restarts|$last_restart|$((uptime + CHECK_INTERVAL))"
     fi
@@ -245,17 +245,17 @@ cleanup_all() {
 if [[ "$1" == "--daemon" ]]; then
     echo $$ > "$PID_FILE"
     load_state
-
+    
     trap 'cleanup_all; discord_send "🛑 Bot Stopped" "Roblox Bot dimatikan (graceful shutdown)." 15158332; exit 0' SIGTERM SIGINT
-
+    
     log "🚀 Bot started | Instances: ${#INSTANCES[@]} | PID: $$"
     discord_send "🚀 Bot Started" "Roblox Bot aktif dengan **${#INSTANCES[@]}** instance.\n\n**Config:**\n• Check interval: ${CHECK_INTERVAL}s\n• Cache interval: ${CACHE_INTERVAL}s\n• Freeze threshold: ${FREEZE_THRESHOLD}s\n• Max restarts/day: ${MAX_RESTARTS}" 3066993
-
+    
     for line in "${INSTANCES[@]}"; do
         IFS='|' read -r pkg url name <<< "$line"
         log "   📦 $name → $pkg"
     done
-
+    
     while true; do
         local i=0
         for line in "${INSTANCES[@]}"; do
@@ -265,7 +265,7 @@ if [[ "$1" == "--daemon" ]]; then
         save_state
         sleep "$CHECK_INTERVAL"
     done
-
+    
     exit 0
 fi
 
