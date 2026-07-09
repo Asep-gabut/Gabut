@@ -1,9 +1,5 @@
 #!/data/data/com.termux/files/usr/bin/bash
 
-# ═══════════════════════════════════════════════════════════════════════
-#  CONFIG — EDIT INI AJA
-# ═══════════════════════════════════════════════════════════════════════
-
 INSTANCES=(
    "free.nokaA|https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&type=Server|Bot1"
    "free.nokaB|https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&type=Server|Bot2"
@@ -16,10 +12,6 @@ MAX_RESTARTS="50"
 
 DISCORD_WEBHOOK="https://discord.com/api/webhooks/1483451715104804964/o0vgYLS-zg4WUXHQM-GiaT0idCfzz-bqPAqRXi4ME0xjEQusxdA3zmEdRQIzUiHovOb3"
 DISCORD_PING_USER=""
-
-# ═══════════════════════════════════════════════════════════════════════
-#  CORE
-# ═══════════════════════════════════════════════════════════════════════
 
 PID_FILE="/data/data/com.termux/files/usr/tmp/roblox_bot.pid"
 LOG_FILE="/sdcard/roblox_bot.log"
@@ -38,12 +30,9 @@ discord_send() {
     local description="$2"
     local color="$3"
     local image_path="$4"
-
     [[ -z "$DISCORD_WEBHOOK" ]] && return
-
     local ping=""
     [[ -n "$DISCORD_PING_USER" ]] && ping="<@$DISCORD_PING_USER> "
-
     if [[ -n "$image_path" && -f "$image_path" ]]; then
         local boundary="----BotBoundary$(date +%s)"
         {
@@ -59,8 +48,7 @@ discord_send() {
             cat "$image_path"
             echo ""
             echo "--$boundary--"
-        } | curl -s -X POST -H "Content-Type: multipart/form-data; boundary=$boundary" \
-            --data-binary @- "$DISCORD_WEBHOOK" >/dev/null 2>&1 &
+        } | curl -s -X POST -H "Content-Type: multipart/form-data; boundary=$boundary" --data-binary @- "$DISCORD_WEBHOOK" >/dev/null 2>&1 &
     else
         local json="{\"content\":\"${ping}\",\"embeds\":[{\"title\":\"$title\",\"description\":\"$description\",\"color\":$color,\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"footer\":{\"text\":\"Roblox Bot • Termux\"}}]}"
         curl -s -H "Content-Type: application/json" -X POST -d "$json" "$DISCORD_WEBHOOK" >/dev/null 2>&1 &
@@ -92,7 +80,17 @@ save_state() {
 }
 
 is_running() {
-    su -c "pidof $1" >/dev/null 2>&1
+    local pkg="$1"
+    local pid
+    pid=$(su -c "pidof $pkg" 2>/dev/null)
+    [[ -z "$pid" ]] && return 1
+    for p in $pid; do
+        local state
+        state=$(su -c "cat /proc/$p/stat 2>/dev/null | awk '{print \$3}'")
+        [[ "$state" == "Z" ]] && continue
+        [[ -d "/proc/$p" ]] && return 0
+    done
+    return 1
 }
 
 is_frozen() {
@@ -100,17 +98,13 @@ is_frozen() {
     local pid
     pid=$(su -c "pidof $pkg" 2>/dev/null)
     [[ -z "$pid" ]] && return 1
-
     local stat_file="/proc/$pid/stat"
     [[ ! -f "$stat_file" ]] && return 1
-
     local cpu_time
     cpu_time=$(su -c "cat $stat_file" 2>/dev/null | awk '{print $14+$15}')
     [[ -z "$cpu_time" ]] && return 1
-
     local cache_key="cpu_${pkg}"
     local last_cpu="${INSTANCE_STATE[$cache_key]:-0}"
-
     if [[ "$last_cpu" == "$cpu_time" ]]; then
         local frozen_since="${INSTANCE_STATE[${cache_key}_time]:-$(( $(date +%s) - FREEZE_THRESHOLD - 1 ))}"
         local now=$(date +%s)
@@ -128,11 +122,21 @@ launch() {
     local pkg="$1"
     local url="$2"
     local name="$3"
-
     log "[$name] Launching $pkg..."
+    kill_pkg "$pkg"
+    sleep 2
     su -c "am start -a android.intent.action.VIEW -d '$url' -p $pkg" >/dev/null 2>&1
-    sleep 10
-    log "[$name] ✅ Launched"
+    sleep 12
+    if is_running "$pkg"; then
+        log "[$name] ✅ Launched"
+        return 0
+    else
+        log "[$name] ❌ Failed, retrying..."
+        sleep 3
+        su -c "am start -a android.intent.action.VIEW -d '$url' -p $pkg" >/dev/null 2>&1
+        sleep 10
+        is_running "$pkg" && log "[$name] ✅ Retry OK" || log "[$name] ❌ Retry failed"
+    fi
 }
 
 kill_pkg() {
@@ -142,144 +146,122 @@ kill_pkg() {
 clear_cache() {
     local pkg="$1"
     local pkg_dir="/data/data/$pkg"
-
     local cache_dirs
     cache_dirs=$(su -c "find $pkg_dir -maxdepth 1 -type d -iname '*cache*' 2>/dev/null")
-
     if [[ -z "$cache_dirs" ]]; then
-        log "[$pkg] ⚠️ No cache dirs found, skipping cache clear"
+        log "[$pkg] ⚠️ No cache dirs found"
         return
     fi
-
     while IFS= read -r dir; do
         [[ -n "$dir" ]] && su -c "rm -rf $dir/*" 2>/dev/null && log "[$pkg] Cleared: $dir"
     done <<< "$cache_dirs"
-
     local ext_cache="/sdcard/Android/data/$pkg/cache"
     [[ -d "$ext_cache" ]] && su -c "rm -rf $ext_cache/*" 2>/dev/null
-
-    log "[$pkg] ✅ Cache cleared (login preserved)"
+    log "[$pkg] ✅ Cache cleared"
 }
 
 process_instance() {
     local idx="$1"
     local line="$2"
-
     IFS='|' read -r pkg url name <<< "$line"
-
     local state="${INSTANCE_STATE[$idx]:-0|0|0|0}"
     local last_cache restarts last_restart uptime
     IFS='|' read -r last_cache restarts last_restart uptime <<< "$state"
-
     local now_epoch=$(date +%s)
     local today=$(date +%Y%m%d)
     local today_key="day_${idx}_${today}"
     local today_restarts="${INSTANCE_STATE[$today_key]:-0}"
 
-    # ─── 1. Kalau belum jalan → launch langsung ───
     if ! is_running "$pkg"; then
-        log "[$name] 💀 Not running, launching..."
-
+        log "[$name] 💀 Crash/mati!"
+        if (( today_restarts >= MAX_RESTARTS )); then
+            log "[$name] ⚠️ MAX RESTARTS reached"
+            discord_send "⚠️ Max Restarts" "**$name** skip (udah $today_restarts kali)." 15158332
+            return
+        fi
+        discord_send "💀 Crash" "**$name** crash. Restarting..." 16711680 "$(take_screenshot)"
         launch "$pkg" "$url" "$name"
-
-        ((restarts++))
-        ((today_restarts++))
+        ((restarts++)); ((today_restarts++))
         INSTANCE_STATE["$idx"]="$now_epoch|$restarts|$now_epoch|$uptime"
         INSTANCE_STATE["$today_key"]="$today_restarts"
         save_state
-
-        log "[$name] 🚀 Started (restart #$restarts)"
-        discord_send "🚀 Instance Started" "**$name** \`$pkg\` di-start." 3066993
-        sleep 8
+        log "[$name] 🚀 Restarted ($restarts total)"
+        discord_send "🚀 Restarted" "**$name** restart. Total: $restarts" 3066993
         return
     fi
 
-    # ─── 2. Cek freeze ───
     if is_frozen "$pkg"; then
-        log "[$name] 🥶 Frozen, restarting..."
-        discord_send "🥶 Instance Frozen" "**$name** \`$pkg\` freeze." 16711680 "$(take_screenshot)"
-
+        log "[$name] 🥶 Frozen!"
+        if (( today_restarts >= MAX_RESTARTS )); then
+            log "[$name] ⚠️ MAX RESTARTS reached"
+            return
+        fi
+        discord_send "🥶 Frozen" "**$name** freeze. Restarting..." 16711680 "$(take_screenshot)"
         kill_pkg "$pkg"
         sleep 2
         clear_cache "$pkg"
         sleep 1
         launch "$pkg" "$url" "$name"
-
-        ((restarts++))
-        ((today_restarts++))
+        ((restarts++)); ((today_restarts++))
         INSTANCE_STATE["$idx"]="$now_epoch|$restarts|$now_epoch|$uptime"
         INSTANCE_STATE["$today_key"]="$today_restarts"
         save_state
-
         log "[$name] 🚀 Restarted after freeze"
-        discord_send "🚀 Instance Restarted" "**$name** \`$pkg\` restart setelah freeze." 3066993
-        sleep 8
+        discord_send "🚀 Restarted" "**$name** restart setelah freeze." 3066993
         return
     fi
 
-    # ─── 3. Auto clear cache ───
     if [[ "$CACHE_INTERVAL" != "0" ]] && (( now_epoch - last_cache >= CACHE_INTERVAL )); then
-        log "[$name] 🧹 Auto cache clear..."
-        discord_send "🧹 Cache Clear" "**$name** \`$pkg\` cache clear." 3447003
-
+        log "[$name] 🧹 Cache clear..."
+        discord_send "🧹 Cache Clear" "**$name** cache clear." 3447003
         kill_pkg "$pkg"
         sleep 2
         clear_cache "$pkg"
         sleep 1
         launch "$pkg" "$url" "$name"
-
         INSTANCE_STATE["$idx"]="$now_epoch|$restarts|$last_restart|$uptime"
         save_state
-
-        log "[$name] ✅ Cache cleared & relaunched"
-        discord_send "🚀 Relaunched" "**$name** \`$pkg\` restart setelah cache clear." 3066993
-        sleep 8
+        log "[$name] ✅ Cache cleared"
+        discord_send "🚀 Relaunched" "**$name** restart setelah cache clear." 3066993
         return
     fi
 
-    # Update uptime
     if (( last_restart > 0 )); then
         INSTANCE_STATE["$idx"]="$last_cache|$restarts|$last_restart|$((uptime + CHECK_INTERVAL))"
     fi
 }
 
 cleanup_all() {
-    log "🧹 Cleaning up all instances..."
+    log "🧹 Cleaning up..."
     for line in "${INSTANCES[@]}"; do
         IFS='|' read -r pkg _ name <<< "$line"
-        log "   Killing $name ($pkg)..."
         kill_pkg "$pkg"
     done
     rm -f "$PID_FILE" "$STATE_FILE"
 }
 
-# ═══════════════════════════════════════════════════════════════════════
-#  DAEMON MODE
-# ═══════════════════════════════════════════════════════════════════════
-
 if [[ "$1" == "--daemon" ]]; then
     echo $$ > "$PID_FILE"
     load_state
+    trap 'cleanup_all; discord_send "🛑 Stopped" "Bot dimatikan." 15158332; exit 0' SIGTERM SIGINT
+    log "🚀 Bot started | ${#INSTANCES[@]} instances"
+    discord_send "🚀 Started" "Bot aktif: **${#INSTANCES[@]}** instance." 3066993
 
-    trap 'cleanup_all; discord_send "🛑 Bot Stopped" "Roblox Bot dimatikan (graceful shutdown)." 15158332; exit 0' SIGTERM SIGINT
-
-    log "🚀 Bot started | Instances: ${#INSTANCES[@]} | PID: $$"
-    discord_send "🚀 Bot Started" "Roblox Bot aktif dengan **${#INSTANCES[@]}** instance.\n\n**Config:**\n• Check interval: ${CHECK_INTERVAL}s\n• Cache interval: ${CACHE_INTERVAL}s\n• Freeze threshold: ${FREEZE_THRESHOLD}s\n• Max restarts/day: ${MAX_RESTARTS}" 3066993
-
+    log "📦 Launching all instances..."
+    local i=0
     for line in "${INSTANCES[@]}"; do
         IFS='|' read -r pkg url name <<< "$line"
-        log "   📦 $name → $pkg"
+        launch "$pkg" "$url" "$name"
+        ((i++))
+        (( i < ${#INSTANCES[@]} )) && sleep 5
     done
+    log "✅ All launched"
 
     while true; do
-        local i=0
+        i=0
         for line in "${INSTANCES[@]}"; do
             process_instance "$i" "$line"
             ((i++))
-            if (( i < ${#INSTANCES[@]} )); then
-                log "⏳ Waiting 3s before next instance..."
-                sleep 3
-            fi
         done
         save_state
         sleep "$CHECK_INTERVAL"
@@ -287,115 +269,54 @@ if [[ "$1" == "--daemon" ]]; then
     exit 0
 fi
 
-# ═══════════════════════════════════════════════════════════════════════
-#  CLI
-# ═══════════════════════════════════════════════════════════════════════
-
 case "$1" in
     start)
-        if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-            echo "❌ Bot already running (PID: $(cat "$PID_FILE"))"
-            exit 1
-        fi
+        [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null && echo "❌ Already running" && exit 1
         nohup bash "$SCRIPT_PATH" --daemon > /dev/null 2>&1 &
         sleep 1
-        if [[ -f "$PID_FILE" ]]; then
-            echo "✅ Bot started (PID: $(cat "$PID_FILE"))"
-            echo "📋 Log: $LOG_FILE"
-            echo "📊 State: $STATE_FILE"
-        else
-            echo "❌ Failed to start"
-        fi
+        [[ -f "$PID_FILE" ]] && echo "✅ Started (PID: $(cat "$PID_FILE"))" || echo "❌ Failed"
         ;;
     stop)
-        if [[ -f "$PID_FILE" ]]; then
-            local pid
-            pid=$(cat "$PID_FILE")
-            kill "$pid" 2>/dev/null
-            sleep 1
-            kill -9 "$pid" 2>/dev/null
-            rm -f "$PID_FILE"
-            for line in "${INSTANCES[@]}"; do
-                IFS='|' read -r pkg _ name <<< "$line"
-                kill_pkg "$pkg"
-            done
-            rm -f "$STATE_FILE"
-            log "🛑 Bot stopped (manual)"
-            discord_send "🛑 Bot Stopped" "Roblox Bot dimatikan secara manual." 15158332
-            echo "🛑 Bot stopped"
-        else
-            echo "Bot not running"
-        fi
+        [[ -f "$PID_FILE" ]] && kill "$(cat "$PID_FILE")" 2>/dev/null && sleep 1 && kill -9 "$(cat "$PID_FILE")" 2>/dev/null
+        rm -f "$PID_FILE"
+        for line in "${INSTANCES[@]}"; do IFS='|' read -r pkg _ _ <<< "$line"; kill_pkg "$pkg"; done
+        rm -f "$STATE_FILE"
+        log "🛑 Stopped"
+        discord_send "🛑 Stopped" "Bot dimatikan manual." 15158332
+        echo "🛑 Stopped"
         ;;
-    restart)
-        bash "$SCRIPT_PATH" stop
-        sleep 2
-        bash "$SCRIPT_PATH" start
-        ;;
+    restart) bash "$SCRIPT_PATH" stop; sleep 2; bash "$SCRIPT_PATH" start ;;
     status)
         if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
             echo "🟢 Running (PID: $(cat "$PID_FILE"))"
-            echo ""
             load_state
-            echo "📦 Instances:"
             local i=0
             for line in "${INSTANCES[@]}"; do
                 IFS='|' read -r pkg _ name <<< "$line"
                 local state="${INSTANCE_STATE[$i]:-0|0|0|0}"
-                local last_cache restarts last_restart uptime
-                IFS='|' read -r last_cache restarts last_restart uptime <<< "$state"
-                local status_emoji="🔴"
-                is_running "$pkg" && status_emoji="🟢"
-                local uptime_str="$((uptime / 3600))h $(( (uptime % 3600) / 60 ))m"
-                echo "   $status_emoji $name | $pkg"
-                echo "      Restarts: $restarts | Uptime: $uptime_str"
+                local _c restarts _r uptime
+                IFS='|' read -r _c restarts _r uptime <<< "$state"
+                is_running "$pkg" && echo "   🟢 $name | Restarts: $restarts | Uptime: $((uptime/3600))h $(((uptime%3600)/60))m" || echo "   🔴 $name | Restarts: $restarts"
                 ((i++))
             done
-            echo ""
-            echo "🌐 Webhook: $([[ -n "$DISCORD_WEBHOOK" ]] && echo "✅ Configured" || echo "❌ Not set")"
         else
             echo "🔴 Stopped"
         fi
         ;;
-    log)
-        [[ -f "$LOG_FILE" ]] && tail -f "$LOG_FILE" || echo "No log yet"
-        ;;
+    log) [[ -f "$LOG_FILE" ]] && tail -f "$LOG_FILE" || echo "No log" ;;
     test-webhook)
-        [[ -z "$DISCORD_WEBHOOK" ]] && echo "❌ DISCORD_WEBHOOK belum di-set!" && exit 1
-        echo "Testing webhook..."
-        discord_send "🧪 Test Webhook" "Webhook berhasil dikirim dari Termux!\n\n**Device:** $(getprop ro.product.model)\n**Android:** $(getprop ro.build.version.release)" 3447003
-        echo "✅ Test webhook sent! Cek Discord lu."
+        [[ -z "$DISCORD_WEBHOOK" ]] && echo "❌ Webhook not set" && exit 1
+        discord_send "🧪 Test" "Webhook OK.\n**Device:** $(getprop ro.product.model)" 3447003
+        echo "✅ Sent"
         ;;
     test-screenshot)
-        echo "Taking screenshot..."
-        local ss
-        ss=$(take_screenshot)
-        [[ -n "$ss" ]] && echo "✅ Screenshot: $ss" && discord_send "🧪 Test Screenshot" "Screenshot test." 3447003 "$ss" || echo "❌ Failed"
+        local ss; ss=$(take_screenshot)
+        [[ -n "$ss" ]] && echo "✅ $ss" && discord_send "🧪 Screenshot" "Test." 3447003 "$ss" || echo "❌ Failed"
         ;;
     test-launch)
-        echo "Testing launch instance 0..."
         IFS='|' read -r pkg url name <<< "${INSTANCES[0]}"
-        echo "Package: $pkg | URL: $url"
-        sleep 3
         launch "$pkg" "$url" "$name"
-        echo "✅ Launched"
         ;;
-    reset-state)
-        rm -f "$STATE_FILE"
-        echo "✅ State file cleared. Restart counter reset."
-        ;;
-    *)
-        echo "🎮 Roblox Auto Bot"
-        echo ""
-        echo "Usage:"
-        echo "  bash roblox_bot.sh start"
-        echo "  bash roblox_bot.sh stop"
-        echo "  bash roblox_bot.sh restart"
-        echo "  bash roblox_bot.sh status"
-        echo "  bash roblox_bot.sh log"
-        echo "  bash roblox_bot.sh test-webhook"
-        echo "  bash roblox_bot.sh test-screenshot"
-        echo "  bash roblox_bot.sh test-launch"
-        echo "  bash roblox_bot.sh reset-state"
-        ;;
+    reset-state) rm -f "$STATE_FILE"; echo "✅ Reset" ;;
+    *) echo "🎮 Roblox Bot | Usage: start|stop|restart|status|log|test-webhook|test-screenshot|test-launch|reset-state" ;;
 esac
