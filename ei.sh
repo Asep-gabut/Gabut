@@ -5,7 +5,7 @@ INSTANCES=(
    "free.nokaB|https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&type=Server|Bot2"
 )
 
-CHECK_INTERVAL="5"
+CHECK_INTERVAL="2"
 CACHE_INTERVAL="3600"
 FREEZE_THRESHOLD="60"
 MAX_RESTARTS="50"
@@ -132,7 +132,7 @@ launch() {
         return 0
     else
         log "[$name] ❌ Failed, retrying..."
-        sleep 3
+        sleep 10
         su -c "am start -a android.intent.action.VIEW -d '$url' -p $pkg" >/dev/null 2>&1
         sleep 10
         is_running "$pkg" && log "[$name] ✅ Retry OK" || log "[$name] ❌ Retry failed"
