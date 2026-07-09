@@ -38,12 +38,12 @@ discord_send() {
     local description="$2"
     local color="$3"
     local image_path="$4"
-    
+
     [[ -z "$DISCORD_WEBHOOK" ]] && return
-    
+
     local ping=""
     [[ -n "$DISCORD_PING_USER" ]] && ping="<@$DISCORD_PING_USER> "
-    
+
     if [[ -n "$image_path" && -f "$image_path" ]]; then
         local boundary="----BotBoundary$(date +%s)"
         {
@@ -100,17 +100,17 @@ is_frozen() {
     local pid
     pid=$(su -c "pidof $pkg" 2>/dev/null)
     [[ -z "$pid" ]] && return 1
-    
+
     local stat_file="/proc/$pid/stat"
     [[ ! -f "$stat_file" ]] && return 1
-    
+
     local cpu_time
     cpu_time=$(su -c "cat $stat_file" 2>/dev/null | awk '{print $14+$15}')
     [[ -z "$cpu_time" ]] && return 1
-    
+
     local cache_key="cpu_${pkg}"
     local last_cpu="${INSTANCE_STATE[$cache_key]:-0}"
-    
+
     if [[ "$last_cpu" == "$cpu_time" ]]; then
         local frozen_since="${INSTANCE_STATE[${cache_key}_time]:-$(( $(date +%s) - FREEZE_THRESHOLD - 1 ))}"
         local now=$(date +%s)
@@ -128,10 +128,10 @@ launch() {
     local pkg="$1"
     local url="$2"
     local name="$3"
-    
+
     log "[$name] Launching $pkg..."
     su -c "am start -a android.intent.action.VIEW -d '$url' -p $pkg" >/dev/null 2>&1
-    sleep 10  # Cukup 5 detik, jangan 10-12
+    sleep 10
     log "[$name] ✅ Launched"
 }
 
@@ -142,105 +142,101 @@ kill_pkg() {
 clear_cache() {
     local pkg="$1"
     local pkg_dir="/data/data/$pkg"
-    
-    # Cek folder yang mengandung "cache" di dalam package dir
+
     local cache_dirs
     cache_dirs=$(su -c "find $pkg_dir -maxdepth 1 -type d -iname '*cache*' 2>/dev/null")
-    
+
     if [[ -z "$cache_dirs" ]]; then
         log "[$pkg] ⚠️ No cache dirs found, skipping cache clear"
         return
     fi
-    
-    # Hapus isi tiap folder cache yang ketemu
+
     while IFS= read -r dir; do
         [[ -n "$dir" ]] && su -c "rm -rf $dir/*" 2>/dev/null && log "[$pkg] Cleared: $dir"
     done <<< "$cache_dirs"
-    
-    # Cek juga di storage external (Android/data)
+
     local ext_cache="/sdcard/Android/data/$pkg/cache"
     [[ -d "$ext_cache" ]] && su -c "rm -rf $ext_cache/*" 2>/dev/null
-    
+
     log "[$pkg] ✅ Cache cleared (login preserved)"
 }
 
 process_instance() {
     local idx="$1"
     local line="$2"
-    
+
     IFS='|' read -r pkg url name <<< "$line"
-    
+
     local state="${INSTANCE_STATE[$idx]:-0|0|0|0}"
     local last_cache restarts last_restart uptime
     IFS='|' read -r last_cache restarts last_restart uptime <<< "$state"
-    
+
     local now_epoch=$(date +%s)
     local today=$(date +%Y%m%d)
     local today_key="day_${idx}_${today}"
     local today_restarts="${INSTANCE_STATE[$today_key]:-0}"
-    
-    # ─── 1. Kalau belum jalan → launch langsung, jangan kill dulu ───
+
+    # ─── 1. Kalau belum jalan → launch langsung ───
     if ! is_running "$pkg"; then
         log "[$name] 💀 Not running, launching..."
-        
-        # JANGAN kill_pkg di sini! Langsung launch
+
         launch "$pkg" "$url" "$name"
-        
+
         ((restarts++))
         ((today_restarts++))
         INSTANCE_STATE["$idx"]="$now_epoch|$restarts|$now_epoch|$uptime"
         INSTANCE_STATE["$today_key"]="$today_restarts"
         save_state
-        
+
         log "[$name] 🚀 Started (restart #$restarts)"
         discord_send "🚀 Instance Started" "**$name** \`$pkg\` di-start." 3066993
         sleep 8
         return
     fi
-    
+
     # ─── 2. Cek freeze ───
     if is_frozen "$pkg"; then
         log "[$name] 🥶 Frozen, restarting..."
         discord_send "🥶 Instance Frozen" "**$name** \`$pkg\` freeze." 16711680 "$(take_screenshot)"
-        
+
         kill_pkg "$pkg"
         sleep 2
         clear_cache "$pkg"
         sleep 1
         launch "$pkg" "$url" "$name"
-        
+
         ((restarts++))
         ((today_restarts++))
         INSTANCE_STATE["$idx"]="$now_epoch|$restarts|$now_epoch|$uptime"
-        INSTANCE_STATE["$today_key]="$today_restarts"
+        INSTANCE_STATE["$today_key"]="$today_restarts"
         save_state
-        
+
         log "[$name] 🚀 Restarted after freeze"
         discord_send "🚀 Instance Restarted" "**$name** \`$pkg\` restart setelah freeze." 3066993
         sleep 8
         return
     fi
-    
+
     # ─── 3. Auto clear cache ───
     if [[ "$CACHE_INTERVAL" != "0" ]] && (( now_epoch - last_cache >= CACHE_INTERVAL )); then
         log "[$name] 🧹 Auto cache clear..."
         discord_send "🧹 Cache Clear" "**$name** \`$pkg\` cache clear." 3447003
-        
+
         kill_pkg "$pkg"
         sleep 2
         clear_cache "$pkg"
         sleep 1
         launch "$pkg" "$url" "$name"
-        
+
         INSTANCE_STATE["$idx"]="$now_epoch|$restarts|$last_restart|$uptime"
         save_state
-        
+
         log "[$name] ✅ Cache cleared & relaunched"
         discord_send "🚀 Relaunched" "**$name** \`$pkg\` restart setelah cache clear." 3066993
         sleep 8
         return
     fi
-    
+
     # Update uptime
     if (( last_restart > 0 )); then
         INSTANCE_STATE["$idx"]="$last_cache|$restarts|$last_restart|$((uptime + CHECK_INTERVAL))"
@@ -264,30 +260,30 @@ cleanup_all() {
 if [[ "$1" == "--daemon" ]]; then
     echo $$ > "$PID_FILE"
     load_state
-    
+
     trap 'cleanup_all; discord_send "🛑 Bot Stopped" "Roblox Bot dimatikan (graceful shutdown)." 15158332; exit 0' SIGTERM SIGINT
-    
+
     log "🚀 Bot started | Instances: ${#INSTANCES[@]} | PID: $$"
     discord_send "🚀 Bot Started" "Roblox Bot aktif dengan **${#INSTANCES[@]}** instance.\n\n**Config:**\n• Check interval: ${CHECK_INTERVAL}s\n• Cache interval: ${CACHE_INTERVAL}s\n• Freeze threshold: ${FREEZE_THRESHOLD}s\n• Max restarts/day: ${MAX_RESTARTS}" 3066993
-    
+
     for line in "${INSTANCES[@]}"; do
         IFS='|' read -r pkg url name <<< "$line"
         log "   📦 $name → $pkg"
     done
-    
-while true; do
-    local i=0
-    for line in "${INSTANCES[@]}"; do
-        process_instance "$i" "$line"
-        ((i++))
-        if (( i < ${#INSTANCES[@]} )); then
-            log "⏳ Waiting 3s before next instance..."
-            sleep 3
-        fi
+
+    while true; do
+        local i=0
+        for line in "${INSTANCES[@]}"; do
+            process_instance "$i" "$line"
+            ((i++))
+            if (( i < ${#INSTANCES[@]} )); then
+                log "⏳ Waiting 3s before next instance..."
+                sleep 3
+            fi
+        done
+        save_state
+        sleep "$CHECK_INTERVAL"
     done
-    save_state
-    sleep "$CHECK_INTERVAL"
-done
     exit 0
 fi
 
@@ -381,7 +377,7 @@ case "$1" in
         IFS='|' read -r pkg url name <<< "${INSTANCES[0]}"
         echo "Package: $pkg | URL: $url"
         sleep 3
-        launch "$pkg" "$url"
+        launch "$pkg" "$url" "$name"
         echo "✅ Launched"
         ;;
     reset-state)
