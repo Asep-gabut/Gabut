@@ -130,12 +130,8 @@ launch() {
     local name="$3"
     
     log "[$name] Launching $pkg..."
-    
-    # Buka dengan task baru terpisah
-    su -c "am start -W -n $pkg/com.roblox.client.ActivitySplash -a android.intent.action.VIEW -d '$url' --activity-multiple-task" >/dev/null 2>&1
-    
-    sleep 20
-    
+    su -c "am start -a android.intent.action.VIEW -d '$url' -p $pkg" >/dev/null 2>&1
+    sleep 10
     log "[$name] ✅ Launched"
 }
 
@@ -183,37 +179,44 @@ process_instance() {
     local today_key="day_${idx}_${today}"
     local today_restarts="${INSTANCE_STATE[$today_key]:-0}"
     
+    # Cek crash / mati
+    if ! is_running "$pkg"; then
+        log "[$name] 💀 Not running, launching..."
+        
+        # Kill bersih dulu (kalau ada sisa process)
+        kill_pkg "$pkg"
+        sleep 2
+        
+        # Clear cache (tanpa hapus data/login)
+        clear_cache "$pkg"
+        sleep 1
+        
+        # Launch
+        launch "$pkg" "$url" "$name"
+        
+        # Update state
+        ((restarts++))
+        ((today_restarts++))
+        INSTANCE_STATE["$idx"]="$now_epoch|$restarts|$now_epoch|$uptime"
+        INSTANCE_STATE["$today_key"]="$today_restarts"
+        save_state
+        
+        log "[$name] 🚀 Started (restart #$restarts today: $today_restarts)"
+        discord_send "🚀 Instance Started" "**$name** \`$pkg\` di-start. Restart hari ini: $today_restarts" 3066993
+        sleep 8
+        return
+    fi
+    
+    # Cek freeze
     if is_frozen "$pkg"; then
-        log "[$name] 🥶 FROZEN/ANR detected!"
-        discord_send "🥶 Instance Frozen" "**$name** \`$pkg\` freeze/ANR terdeteksi. Restarting..." 16711680 "$(take_screenshot)"
+        log "[$name] 🥶 Frozen, restarting..."
+        discord_send "🥶 Instance Frozen" "**$name** \`$pkg\` freeze. Restarting..." 16711680 "$(take_screenshot)"
         
         kill_pkg "$pkg"
         sleep 2
         clear_cache "$pkg"
-        sleep 0.5
-        launch "$pkg" "$url"
-        
-        ((restarts++))
-        ((today_restarts++))
-        INSTANCE_STATE["$idx"]="$now_epoch|$restarts|$now_epoch|$uptime"
-        INSTANCE_STATE["$today_key"]="$today_restarts"
-        save_state
-        
-        log "[$name] 🚀 Restarted after freeze (total: $restarts, today: $today_restarts)"
-        discord_send "🚀 Instance Restarted" "**$name** \`$pkg\` restart setelah freeze. Total restart: $restarts" 3066993
-        sleep 10
-        return
-    fi
-    
-    if ! is_running "$pkg"; then
-        log "[$name] 💀 Crash/mati detected!"
-        discord_send "💀 Instance Crash" "**$name** \`$pkg\` crash/mati. Restarting..." 16711680 "$(take_screenshot)"
-        
-        kill_pkg "$pkg"
         sleep 1
-        clear_cache "$pkg"
-        sleep 0.5
-        launch "$pkg" "$url"
+        launch "$pkg" "$url" "$name"
         
         ((restarts++))
         ((today_restarts++))
@@ -221,38 +224,33 @@ process_instance() {
         INSTANCE_STATE["$today_key"]="$today_restarts"
         save_state
         
-        log "[$name] 🚀 Restarted after crash (total: $restarts, today: $today_restarts)"
-        discord_send "🚀 Instance Restarted" "**$name** \`$pkg\` restart setelah crash. Total restart: $restarts" 3066993
-        sleep 10
+        log "[$name] 🚀 Restarted after freeze"
+        discord_send "🚀 Instance Restarted" "**$name** \`$pkg\` restart setelah freeze." 3066993
+        sleep 8
         return
     fi
     
-    if (( today_restarts >= MAX_RESTARTS )); then
-        log "[$name] ⚠️ MAX RESTARTS ($MAX_RESTARTS) reached today! Instance di-skip."
-        discord_send "⚠️ Max Restarts Reached" "**$name** \`$pkg\` udah restart $today_restarts kali hari ini. Bot skip instance ini biar ga infinite loop." 15158332
-        INSTANCE_STATE["$idx"]="$last_cache|$restarts|$last_restart|$uptime"
-        save_state
-        return
-    fi
-    
+    # Auto clear cache
     if [[ "$CACHE_INTERVAL" != "0" ]] && (( now_epoch - last_cache >= CACHE_INTERVAL )); then
-        log "[$name] 🧹 Auto clear cache..."
-        discord_send "🧹 Auto Cache Clear" "**$name** \`$pkg\` cache di-clear otomatis." 3447003
+        log "[$name] 🧹 Auto cache clear..."
+        discord_send "🧹 Cache Clear" "**$name** \`$pkg\` cache clear." 3447003
         
         kill_pkg "$pkg"
-        sleep 1
+        sleep 2
         clear_cache "$pkg"
-        launch "$pkg" "$url"
+        sleep 1
+        launch "$pkg" "$url" "$name"
         
         INSTANCE_STATE["$idx"]="$now_epoch|$restarts|$last_restart|$uptime"
         save_state
         
         log "[$name] ✅ Cache cleared & relaunched"
-        discord_send "🚀 Cache Cleared & Restarted" "**$name** \`$pkg\` berhasil restart setelah cache clear." 3066993
-        sleep 10
+        discord_send "🚀 Relaunched" "**$name** \`$pkg\` restart setelah cache clear." 3066993
+        sleep 8
         return
     fi
     
+    # Update uptime
     if (( last_restart > 0 )); then
         INSTANCE_STATE["$idx"]="$last_cache|$restarts|$last_restart|$((uptime + CHECK_INTERVAL))"
     fi
@@ -291,12 +289,15 @@ while true; do
     for line in "${INSTANCES[@]}"; do
         process_instance "$i" "$line"
         ((i++))
-        # Delay antar instance (kecuali yang terakhir)
-        (( i < ${#INSTANCES[@]} )) && sleep 5
+        # Delay antar instance (5 detik, kecuali yang terakhir)
+        if (( i < ${#INSTANCES[@]} )); then
+            log "⏳ Waiting 5s before next instance..."
+            sleep 5
+        fi
     done
     save_state
     sleep "$CHECK_INTERVAL"
-done    
+done
     exit 0
 fi
 
