@@ -130,12 +130,13 @@ launch() {
     local name="$3"
     
     log "[$name] Launching $pkg..."
-    su -c "am start -a android.intent.action.VIEW -d '$url' -p $pkg" >/dev/null 2>&1
     
-    # Delay biar Roblox kebuka & loading
+    # Buka dengan task baru terpisah
+    su -c "am start -W -n $pkg/com.roblox.client.ActivitySplash -a android.intent.action.VIEW -d '$url' --activity-multiple-task" >/dev/null 2>&1
+    
     sleep 20
     
-    log "[$name] ✅ Launched (waited 20s)"
+    log "[$name] ✅ Launched"
 }
 
 kill_pkg() {
