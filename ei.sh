@@ -135,7 +135,28 @@ kill_pkg() {
 }
 
 clear_cache() {
-    su -c "pm clear $1" >/dev/null 2>&1
+    local pkg="$1"
+    local pkg_dir="/data/data/$pkg"
+    
+    # Cek folder yang mengandung "cache" di dalam package dir
+    local cache_dirs
+    cache_dirs=$(su -c "find $pkg_dir -maxdepth 1 -type d -iname '*cache*' 2>/dev/null")
+    
+    if [[ -z "$cache_dirs" ]]; then
+        log "[$pkg] ⚠️ No cache dirs found, skipping cache clear"
+        return
+    fi
+    
+    # Hapus isi tiap folder cache yang ketemu
+    while IFS= read -r dir; do
+        [[ -n "$dir" ]] && su -c "rm -rf $dir/*" 2>/dev/null && log "[$pkg] Cleared: $dir"
+    done <<< "$cache_dirs"
+    
+    # Cek juga di storage external (Android/data)
+    local ext_cache="/sdcard/Android/data/$pkg/cache"
+    [[ -d "$ext_cache" ]] && su -c "rm -rf $ext_cache/*" 2>/dev/null
+    
+    log "[$pkg] ✅ Cache cleared (login preserved)"
 }
 
 process_instance() {
