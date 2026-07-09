@@ -81,23 +81,9 @@ save_state() {
 
 is_running() {
     local pkg="$1"
-    local pid
-    pid=$(su -c "pidof $pkg" 2>/dev/null)
-    [[ -z "$pid" ]] && return 1
-    
-    # Cek PID bukan zombie
-    for p in $pid; do
-        local state
-        state=$(su -c "cat /proc/$p/stat 2>/dev/null | awk '{print \$3}'")
-        [[ "$state" == "Z" ]] && continue
-        [[ -d "/proc/$p" ]] || continue
-        
-        # Cek ada activity foreground/background
-        local activity
-        activity=$(su -c "dumpsys activity activities | grep -E '$pkg.*(Resumed|Paused|Started)' | head -1" 2>/dev/null)
-        [[ -n "$activity" ]] && return 0
-    done
-    return 1
+    # Cek process ada + activity running (bukan finishing/crashing)
+    su -c "ps -A | grep -q '$pkg'" 2>/dev/null && \
+    su -c "dumpsys activity activities | grep -E '$pkg.*Record' | grep -qv ' finishing'" 2>/dev/null
 }
 
 is_frozen() {
