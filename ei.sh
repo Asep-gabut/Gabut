@@ -1,9 +1,14 @@
 #!/data/data/com.termux/files/usr/bin/bash
 
-INSTANCES=(
-   "free.nokaA|https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&type=Server|Bot1"
-   "free.nokaB|https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&type=Server|Bot2"
-)
+# Auto-detect package prefix free.no
+mapfile -t PACKAGES < <(su -c "pm list packages" | grep -E '^package:free\.no[a-zA-Z]' | sed 's/package://')
+
+INSTANCES=()
+for pkg in "${PACKAGES[@]}"; do
+    INSTANCES+=("$pkg|https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&type=Server|${pkg##*.}")
+done
+
+[[ ${#INSTANCES[@]} -eq 0 ]] && echo "❌ No packages found with prefix free.no" && exit 1
 
 CHECK_INTERVAL="10"
 CACHE_INTERVAL="3600"
