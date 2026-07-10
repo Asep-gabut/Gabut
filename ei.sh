@@ -5,11 +5,8 @@ set -o pipefail
 PACKAGE_PREFIX="free.no"
 ROBLOX_URL="https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&type=Server"
 
-CHECK_INTERVAL=10
-CACHE_INTERVAL=3600
-FREEZE_THRESHOLD=60
-LAUNCH_TIMEOUT=45
-MAX_RESTARTS=50
+CHECK_INTERVAL=3
+CACHE_INTERVAL=3
 
 DISCORD_WEBHOOK="https://discord.com/api/webhooks/1483451715104804964/o0vgYLS-zg4WUXHQM-GiaT0idCfzz-bqPAqRXi4ME0xjEQusxdA3zmEdRQIzUiHovOb3"
 DISCORD_PING_USER=""
@@ -17,6 +14,8 @@ DISCORD_PING_USER=""
 TMP_DIR="/data/data/com.termux/files/usr/tmp"
 PID_FILE="${TMP_DIR}/roblox_bot.pid"
 STATE_FILE="${TMP_DIR}/roblox_state.db"
+
+ALLOWED_PKGS=("com.termux" "$PACKAGE_PREFIX")
 
 discord() {
     local title="$1" desc="$2" color="${3:-3447003}" img="$4"
@@ -69,77 +68,58 @@ alive() {
     su -c "dumpsys window windows 2>/dev/null | grep -q '$pkg'" 2>/dev/null
 }
 
-frozen() {
-    local pkg="$1" pid
-    pid=$(su -c "pidof $pkg 2>/dev/null | awk '{print $1}'")
-    [[ -z "$pid" ]] && return 1
-    local cpu=$(su -c "cat /proc/$pid/stat 2>/dev/null | awk '{print \$14+\$15}'" 2>/dev/null)
-    [[ -z "$cpu" ]] && return 1
-    local last=$(get "cpu_$pkg")
-    local last_t=$(get "cpu_t_$pkg")
-    if [[ -n "$last" && "$last" == "$cpu" ]]; then
-        local now=$(date +%s)
-        local diff=$(( now - ${last_t:-0} ))
-        [[ $diff -ge $FREEZE_THRESHOLD ]] && return 0
-    else
-        set "cpu_$pkg" "$cpu"
-        set "cpu_t_$pkg" "$(date +%s)"
+# Anti-FC: whitelist dari Doze + lock OOM score
+protect_app() {
+    local pkg="$1"
+    # Whitelist dari Doze mode
+    su -c "dumpsys deviceidle whitelist +$pkg 2>/dev/null"
+    # Cari PID Roblox, set OOM score paling rendah (gak di-kill)
+    local pid=$(su -c "pidof $pkg 2>/dev/null")
+    if [[ -n "$pid" ]]; then
+        su -c "echo -17 > /proc/$pid/oom_score_adj 2>/dev/null"
     fi
-    return 1
 }
 
 launch() {
     local pkg="$1" name="$2"
     alive "$pkg" && return 0
-    su -c "am force-stop $pkg 2>/dev/null"; sleep 2
+    su -c "am start -a android.intent.action.VIEW -d '$ROBLOX_URL' -p $pkg" >/dev/null 2>&1
+}
+
+clear_cache() {
+    local pkg="$1"
     su -c "find /data/data/$pkg -maxdepth 1 -type d -iname '*cache*' -exec rm -rf {}/\* 2>/dev/null \;" 2>/dev/null
     [[ -d "/sdcard/Android/data/$pkg/cache" ]] && su -c "rm -rf /sdcard/Android/data/$pkg/cache/*" 2>/dev/null
-    su -c "am start -a android.intent.action.VIEW -d '$ROBLOX_URL' -p $pkg" >/dev/null 2>&1
-    local e=0
-    while (( e < LAUNCH_TIMEOUT )); do
-        alive "$pkg" && return 0
-        sleep 3; ((e += 3))
-    done
-    return 1
+}
+
+kill_unwanted() {
+    local pkg
+    while IFS= read -r pkg; do
+        pkg="${pkg#package:}"
+        local allowed=0
+        for a in "${ALLOWED_PKGS[@]}"; do
+            [[ "$pkg" == "$a"* ]] && { allowed=1; break; }
+        done
+        [[ $allowed -eq 0 ]] && su -c "am force-stop '$pkg' 2>/dev/null" 2>/dev/null
+    done < <(su -c "pm list packages -3" 2>/dev/null)
 }
 
 monitor() {
     local pkg="$1" name="$2"
-    local r=$(get "r_$(date +%Y%m%d)_$pkg")
-    r=${r:-0}
     
-    if ! alive "$pkg"; then
-        (( r >= MAX_RESTARTS )) && { discord "⚠️ Max" "**$name** skip ($r/$MAX_RESTARTS)." 15158332; return; }
-        discord "💀 Crash" "**$name** crash! Restart..." 16711680 "$(ss)"
-        if launch "$pkg" "$name"; then
-            set "r_$(date +%Y%m%d)_$pkg" "$((r+1))"
-            discord "🚀 Restart" "**$name** ok. ($((r+1))/$MAX_RESTARTS)" 3066993
-        fi
-        return
-    fi
-    
-    if frozen "$pkg"; then
-        (( r >= MAX_RESTARTS )) && { discord "⚠️ Max" "**$name** skip freeze ($r/$MAX_RESTARTS)." 15158332; return; }
-        discord "🥶 Freeze" "**$name** freeze! Restart..." 16711680 "$(ss)"
-        if launch "$pkg" "$name"; then
-            set "r_$(date +%Y%m%d)_$pkg" "$((r+1))"
-            discord "🚀 Restart" "**$name** ok (freeze)." 3066993
-        fi
-        return
-    fi
-    
+    # Clear cache tiap 3 detik tanpa relaunch
     if [[ "$CACHE_INTERVAL" != "0" ]]; then
         local now=$(date +%s)
         local last_c=$(get "c_$pkg")
         local diff=$(( now - ${last_c:-0} ))
         if [[ $diff -ge $CACHE_INTERVAL ]]; then
-            discord "🧹 Cache" "**$name** cache clear." 3447003
-            if launch "$pkg" "$name"; then
-                set "c_$pkg" "$(date +%s)"
-                discord "🚀 Relaunch" "**$name** ok (cache)." 3066993
-            fi
+            clear_cache "$pkg"
+            set "c_$pkg" "$(date +%s)"
         fi
     fi
+    
+    # Protect dari FC (Doze whitelist + OOM lock)
+    protect_app "$pkg"
 }
 
 cleanup() {
@@ -150,21 +130,28 @@ cleanup() {
 if [[ "$1" == "daemon" ]]; then
     echo $$ > "$PID_FILE"
     init_db
-    trap 'cleanup; discord "🛑 Stopped" "Bot off." 15158332; exit 0' SIGTERM SIGINT
+    trap 'cleanup; exit 0' SIGTERM SIGINT
     
     PACKAGES=()
     while IFS= read -r pkg; do PACKAGES+=("$pkg"); done < <(su -c "pm list packages" | grep "^package:${PACKAGE_PREFIX}" | sed 's/package://')
-    [[ ${#PACKAGES[@]} -eq 0 ]] && { discord "❌ Error" "No packages found." 16711680; exit 1; }
+    [[ ${#PACKAGES[@]} -eq 0 ]] && { echo "No packages found."; exit 1; }
     
-    discord "🚀 Start" "Bot on: **${#PACKAGES[@]}** instances." 3066993
+    # Force-stop sekali pas awal
+    for pkg in "${PACKAGES[@]}"; do
+        su -c "am force-stop $pkg 2>/dev/null"
+    done
+    sleep 2
     
+    # Buka Roblox sekali doang
     local i=0
     for pkg in "${PACKAGES[@]}"; do
         launch "$pkg" "${pkg##*.}"
         (( i++ )); (( i < ${#PACKAGES[@]} )) && sleep 5
     done
     
+    # Loop: kill unwanted apps + clear cache + protect dari FC
     while true; do
+        kill_unwanted
         for pkg in "${PACKAGES[@]}"; do monitor "$pkg" "${pkg##*.}"; done
         sleep "$CHECK_INTERVAL"
     done
@@ -180,7 +167,7 @@ fi
 
 if [[ "$1" == "stop" ]]; then
     [[ -f "$PID_FILE" ]] && { kill "$(cat "$PID_FILE")" 2>/dev/null; sleep 1; kill -9 "$(cat "$PID_FILE")" 2>/dev/null; }
-    cleanup; discord "🛑 Stop" "Manual off." 15158332; echo "🛑 Stop"
+    cleanup; echo "🛑 Stop"
     exit 0
 fi
 
