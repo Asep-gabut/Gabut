@@ -20,14 +20,11 @@ STATE_FILE="${TMP_DIR}/roblox_state.db"
 
 declare -A PACKAGES
 
-# ═══════════════════════════════════════════════════════
-#  DISCORD
-# ═══════════════════════════════════════════════════════
-
 discord() {
     local title="$1" desc="$2" color="${3:-3447003}" img="$4"
     [[ -z "$DISCORD_WEBHOOK" ]] && return
-    local ping=""; [[ -n "$DISCORD_PING_USER" ]] && ping="<@$DISCORD_PING_USER> "
+    local ping=""
+    [[ -n "$DISCORD_PING_USER" ]] && ping="<@$DISCORD_PING_USER> "
     if [[ -n "$img" && -f "$img" ]]; then
         local b="----BotBoundary$(date +%s)"
         { echo "--$b"; echo 'Content-Disposition: form-data; name="payload_json"'; echo 'Content-Type: application/json'; echo ""; echo "{\"content\":\"${ping}\",\"embeds\":[{\"title\":\"$title\",\"description\":\"$desc\",\"color\":$color,\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"footer\":{\"text\":\"Roblox Bot\"}}]}"; echo "--$b"; echo 'Content-Disposition: form-data; name="file"; filename="s.png"'; echo 'Content-Type: image/png'; echo ""; cat "$img"; echo ""; echo "--$b--"; } | curl -s -X POST -H "Content-Type: multipart/form-data; boundary=$b" --data-binary @- "$DISCORD_WEBHOOK" >/dev/null 2>&1 &
@@ -42,10 +39,6 @@ ss() {
     [[ -f "$p" ]] && echo "$p" || echo ""
 }
 
-# ═══════════════════════════════════════════════════════
-#  SQLITE STATE
-# ═══════════════════════════════════════════════════════
-
 db() { su -c "sqlite3 $STATE_FILE '$1' 2>/dev/null"; }
 
 init_db() {
@@ -55,67 +48,37 @@ init_db() {
 get() { db "SELECT value FROM state WHERE key='$1';" || echo ""; }
 set() { db "INSERT OR REPLACE INTO state(key,value) VALUES('$1','$2');" }
 
-# ═══════════════════════════════════════════════════════
-#  THERMAL DISABLE (ROOT)
-# ═══════════════════════════════════════════════════════
-
 thermal_off() {
-    # Disable thermal engine
     su -c "stop thermal-engine 2>/dev/null"
     su -c "stop thermald 2>/dev/null"
     su -c "stop vendor.thermal-engine 2>/dev/null"
-    
-    # Freeze thermal config
-    su -c "find /system/etc -name '*thermal*' -exec chmod 000 {} \; 2>/dev/null"
-    su -c "find /vendor/etc -name '*thermal*' -exec chmod 000 {} \; 2>/dev/null"
-    
-    # Disable CPU freq limit
     for cpu in /sys/devices/system/cpu/cpu*/cpufreq; do
         su -c "echo performance > $cpu/scaling_governor 2>/dev/null"
     done
-    
-    # Disable GPU throttling (Qualcomm/Adreno)
     su -c "echo 0 > /sys/class/kgsl/kgsl-3d0/throttling 2>/dev/null"
     su -c "echo 0 > /sys/class/kgsl/kgsl-3d0/bus_split 2>/dev/null"
     su -c "echo 1 > /sys/class/kgsl/kgsl-3d0/force_clk_on 2>/dev/null"
     su -c "echo 1 > /sys/class/kgsl/kgsl-3d0/force_bus_on 2>/dev/null"
     su -c "echo 1 > /sys/class/kgsl/kgsl-3d0/force_rail_on 2>/dev/null"
-    
-    # Disable power HAL
     su -c "stop power-hal-1-0 2>/dev/null"
     su -c "stop vendor.power-hal-1-0 2>/dev/null"
 }
 
 thermal_on() {
-    # Re-enable thermal engine
     su -c "start thermal-engine 2>/dev/null"
     su -c "start thermald 2>/dev/null"
     su -c "start vendor.thermal-engine 2>/dev/null"
-    
-    # Restore thermal config
-    su -c "find /system/etc -name '*thermal*' -exec chmod 644 {} \; 2>/dev/null"
-    su -c "find /vendor/etc -name '*thermal*' -exec chmod 644 {} \; 2>/dev/null"
-    
-    # Restore CPU governor
     for cpu in /sys/devices/system/cpu/cpu*/cpufreq; do
         su -c "echo schedutil > $cpu/scaling_governor 2>/dev/null"
     done
-    
-    # Re-enable GPU throttling
     su -c "echo 1 > /sys/class/kgsl/kgsl-3d0/throttling 2>/dev/null"
     su -c "echo 1 > /sys/class/kgsl/kgsl-3d0/bus_split 2>/dev/null"
     su -c "echo 0 > /sys/class/kgsl/kgsl-3d0/force_clk_on 2>/dev/null"
     su -c "echo 0 > /sys/class/kgsl/kgsl-3d0/force_bus_on 2>/dev/null"
     su -c "echo 0 > /sys/class/kgsl/kgsl-3d0/force_rail_on 2>/dev/null"
-    
-    # Re-enable power HAL
     su -c "start power-hal-1-0 2>/dev/null"
     su -c "start vendor.power-hal-1-0 2>/dev/null"
 }
-
-# ═══════════════════════════════════════════════════════
-#  CHECKS
-# ═══════════════════════════════════════════════════════
 
 alive() {
     local pkg="$1" pids
@@ -149,9 +112,6 @@ frozen() {
     fi
     return 1
 }
-# ═══════════════════════════════════════════════════════
-#  ACTIONS
-# ═══════════════════════════════════════════════════════
 
 launch() {
     local pkg="$1" name="$2"
@@ -168,10 +128,6 @@ launch() {
     discord "❌ Failed" "**$name** gagal dibuka." 16711680
     return 1
 }
-
-# ═══════════════════════════════════════════════════════
-#  MONITOR
-# ═══════════════════════════════════════════════════════
 
 monitor() {
     local pkg="$1" name="$2"
@@ -192,10 +148,14 @@ monitor() {
         return
     fi
     
-    local last_c=$(get "c_$pkg")
-    if [[ "$CACHE_INTERVAL" != "0" ]] && [[ $(date +%s) - ${last_c:-0} -ge $CACHE_INTERVAL ]]; then
-        discord "🧹 Cache" "**$name** cache clear." 3447003
-        launch "$pkg" "$name" && { set "c_$pkg" "$(date +%s)"; discord "🚀 Relaunch" "**$name** ok (cache)." 3066993; }
+    if [[ "$CACHE_INTERVAL" != "0" ]]; then
+        local now=$(date +%s)
+        local last_c=$(get "c_$pkg")
+        local diff=$(( now - ${last_c:-0} ))
+        if [[ $diff -ge $CACHE_INTERVAL ]]; then
+            discord "🧹 Cache" "**$name** cache clear." 3447003
+            launch "$pkg" "$name" && { set "c_$pkg" "$(date +%s)"; discord "🚀 Relaunch" "**$name** ok (cache)." 3066993; }
+        fi
     fi
 }
 
@@ -204,10 +164,6 @@ cleanup() {
     thermal_on
     rm -f "$PID_FILE"
 }
-
-# ═══════════════════════════════════════════════════════
-#  DAEMON
-# ═══════════════════════════════════════════════════════
 
 if [[ "$1" == "daemon" ]]; then
     echo $$ > "$PID_FILE"
@@ -232,10 +188,6 @@ if [[ "$1" == "daemon" ]]; then
     done
     exit 0
 fi
-
-# ═══════════════════════════════════════════════════════
-#  CLI
-# ═══════════════════════════════════════════════════════
 
 case "$1" in
     start)
