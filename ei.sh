@@ -135,7 +135,7 @@ monitor() {
     r=${r:-0}
     
     if ! alive "$pkg"; then
-        (( r >= MAX_RESTARTS )) && { discord "⚠️ Max" "**$name** skip ($r/$MAX_RESTARTS)." 15158332; return; }
+        (( r >= MAX_RESTARTS )) && { discord "😑 Max" "**$name** skip ($r/$MAX_RESTARTS)." 15158332; return; }
         discord "💀 Crash" "**$name** crash! Restart..." 16711680 "$(ss)"
         launch "$pkg" "$name" && { set "r_$(date +%Y%m%d)_$pkg" "$((r+1))"; discord "🚀 Restart" "**$name** ok. ($((r+1))/$MAX_RESTARTS)" 3066993; }
         return
