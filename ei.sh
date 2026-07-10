@@ -20,6 +20,8 @@ STATE_FILE="${TMP_DIR}/roblox_state.db"
 
 declare -A PACKAGES
 
+# --- DISCORD ---
+
 discord() {
     local title="$1" desc="$2" color="${3:-3447003}" img="$4"
     [[ -z "$DISCORD_WEBHOOK" ]] && return
@@ -27,7 +29,20 @@ discord() {
     [[ -n "$DISCORD_PING_USER" ]] && ping="<@$DISCORD_PING_USER> "
     if [[ -n "$img" && -f "$img" ]]; then
         local b="----BotBoundary$(date +%s)"
-        { echo "--$b"; echo 'Content-Disposition: form-data; name="payload_json"'; echo 'Content-Type: application/json'; echo ""; echo "{\"content\":\"${ping}\",\"embeds\":[{\"title\":\"$title\",\"description\":\"$desc\",\"color\":$color,\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"footer\":{\"text\":\"Roblox Bot\"}}]}"; echo "--$b"; echo 'Content-Disposition: form-data; name="file"; filename="s.png"'; echo 'Content-Type: image/png'; echo ""; cat "$img"; echo ""; echo "--$b--"; } | curl -s -X POST -H "Content-Type: multipart/form-data; boundary=$b" --data-binary @- "$DISCORD_WEBHOOK" >/dev/null 2>&1 &
+        {
+            echo "--$b"
+            echo 'Content-Disposition: form-data; name="payload_json"'
+            echo 'Content-Type: application/json'
+            echo ""
+            echo "{\"content\":\"${ping}\",\"embeds\":[{\"title\":\"$title\",\"description\":\"$desc\",\"color\":$color,\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"footer\":{\"text\":\"Roblox Bot\"}}]}"
+            echo "--$b"
+            echo 'Content-Disposition: form-data; name="file"; filename="s.png"'
+            echo 'Content-Type: image/png'
+            echo ""
+            cat "$img"
+            echo ""
+            echo "--$b--"
+        } | curl -s -X POST -H "Content-Type: multipart/form-data; boundary=$b" --data-binary @- "$DISCORD_WEBHOOK" >/dev/null 2>&1 &
     else
         curl -s -H "Content-Type: application/json" -X POST -d "{\"content\":\"${ping}\",\"embeds\":[{\"title\":\"$title\",\"description\":\"$desc\",\"color\":$color,\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"footer\":{\"text\":\"Roblox Bot\"}}]}" "$DISCORD_WEBHOOK" >/dev/null 2>&1 &
     fi
@@ -39,6 +54,8 @@ ss() {
     [[ -f "$p" ]] && echo "$p" || echo ""
 }
 
+# --- SQLITE ---
+
 db() { su -c "sqlite3 $STATE_FILE '$1' 2>/dev/null"; }
 
 init_db() {
@@ -47,6 +64,8 @@ init_db() {
 
 get() { db "SELECT value FROM state WHERE key='$1';" || echo ""; }
 set() { db "INSERT OR REPLACE INTO state(key,value) VALUES('$1','$2');" }
+
+# --- THERMAL ---
 
 thermal_off() {
     su -c "stop thermal-engine 2>/dev/null"
@@ -79,6 +98,8 @@ thermal_on() {
     su -c "start power-hal-1-0 2>/dev/null"
     su -c "start vendor.power-hal-1-0 2>/dev/null"
 }
+
+# --- CHECKS ---
 
 alive() {
     local pkg="$1" pids
@@ -113,6 +134,8 @@ frozen() {
     return 1
 }
 
+# --- ACTIONS ---
+
 launch() {
     local pkg="$1" name="$2"
     alive "$pkg" && { discord "ℹ️ Info" "**$name** sudah running." 3447003; return 0; }
@@ -135,7 +158,7 @@ monitor() {
     r=${r:-0}
     
     if ! alive "$pkg"; then
-        (( r >= MAX_RESTARTS )) && { discord "😑 Max" "**$name** skip ($r/$MAX_RESTARTS)." 15158332; return; }
+        (( r >= MAX_RESTARTS )) && { discord "⚠️ Max" "**$name** skip ($r/$MAX_RESTARTS)." 15158332; return; }
         discord "💀 Crash" "**$name** crash! Restart..." 16711680 "$(ss)"
         launch "$pkg" "$name" && { set "r_$(date +%Y%m%d)_$pkg" "$((r+1))"; discord "🚀 Restart" "**$name** ok. ($((r+1))/$MAX_RESTARTS)" 3066993; }
         return
@@ -165,6 +188,8 @@ cleanup() {
     rm -f "$PID_FILE"
 }
 
+# --- DAEMON ---
+
 if [[ "$1" == "daemon" ]]; then
     echo $$ > "$PID_FILE"
     init_db
@@ -188,6 +213,8 @@ if [[ "$1" == "daemon" ]]; then
     done
     exit 0
 fi
+
+# --- CLI ---
 
 case "$1" in
     start)
