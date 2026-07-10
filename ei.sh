@@ -146,7 +146,7 @@ if [[ "$1" == "daemon" ]]; then
     local i=0
     for pkg in "${PACKAGES[@]}"; do
         launch "$pkg" "${pkg##*.}"
-        (( i++ )); (( i < ${#PACKAGES[@]} )) && sleep 5
+        (( i++ )); (( i < ${#PACKAGES[@]} )) && sleep 20
     done
     
     # Loop: kill unwanted apps + clear cache + protect dari FC
