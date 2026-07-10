@@ -68,16 +68,32 @@ alive() {
     su -c "dumpsys window windows 2>/dev/null | grep -q '$pkg'" 2>/dev/null
 }
 
-# Anti-FC: whitelist dari Doze + lock OOM score
 protect_app() {
     local pkg="$1"
-    # Whitelist dari Doze mode
-    su -c "dumpsys deviceidle whitelist +$pkg 2>/dev/null"
-    # Cari PID Roblox, set OOM score paling rendah (gak di-kill)
     local pid=$(su -c "pidof $pkg 2>/dev/null")
-    if [[ -n "$pid" ]]; then
-        su -c "echo -17 > /proc/$pid/oom_score_adj 2>/dev/null"
-    fi
+    [[ -z "$pid" ]] && return
+    
+    # 1. Whitelist dari Doze mode
+    su -c "dumpsys deviceidle whitelist +$pkg 2>/dev/null"
+    
+    # 2. OOM score paling rendah (gak di-kill pas RAM penuh)
+    su -c "echo -1000 > /proc/$pid/oom_score_adj 2>/dev/null"
+    
+    # 3. Real-time CPU priority
+    su -c "chrt -f -p 99 $pid 2>/dev/null"
+    
+    # 4. CPU affinity ke big cores (core 4-7)
+    su -c "taskset -p 0xF0 $pid 2>/dev/null"
+    
+    # 5. Disable app standby
+    su -c "am set-inactive $pkg false 2>/dev/null"
+    
+    # 6. Allow background run
+    su -c "cmd appops set $pkg RUN_ANY_IN_BACKGROUND allow 2>/dev/null"
+    su -c "cmd appops set $pkg RUN_IN_BACKGROUND allow 2>/dev/null"
+    
+    # 7. Ignore battery optimizations
+    su -c "cmd deviceidle whitelist +$pkg 2>/dev/null"
 }
 
 launch() {
@@ -107,7 +123,12 @@ kill_unwanted() {
 monitor() {
     local pkg="$1" name="$2"
     
-    # Clear cache tiap 3 detik tanpa relaunch
+    if ! alive "$pkg"; then
+        discord "💀 Crash" "**$name** crash! Restart..." 16711680 "$(ss)"
+        launch "$pkg" "$name"
+        return
+    fi
+    
     if [[ "$CACHE_INTERVAL" != "0" ]]; then
         local now=$(date +%s)
         local last_c=$(get "c_$pkg")
@@ -118,7 +139,6 @@ monitor() {
         fi
     fi
     
-    # Protect dari FC (Doze whitelist + OOM lock)
     protect_app "$pkg"
 }
 
@@ -136,20 +156,17 @@ if [[ "$1" == "daemon" ]]; then
     while IFS= read -r pkg; do PACKAGES+=("$pkg"); done < <(su -c "pm list packages" | grep "^package:${PACKAGE_PREFIX}" | sed 's/package://')
     [[ ${#PACKAGES[@]} -eq 0 ]] && { echo "No packages found."; exit 1; }
     
-    # Force-stop sekali pas awal
     for pkg in "${PACKAGES[@]}"; do
         su -c "am force-stop $pkg 2>/dev/null"
     done
     sleep 2
     
-    # Buka Roblox sekali doang
     local i=0
     for pkg in "${PACKAGES[@]}"; do
         launch "$pkg" "${pkg##*.}"
-        (( i++ )); (( i < ${#PACKAGES[@]} )) && sleep 20
+        (( i++ )); (( i < ${#PACKAGES[@]} )) && sleep 5
     done
     
-    # Loop: kill unwanted apps + clear cache + protect dari FC
     while true; do
         kill_unwanted
         for pkg in "${PACKAGES[@]}"; do monitor "$pkg" "${pkg##*.}"; done
