@@ -20,8 +20,6 @@ STATE_FILE="${TMP_DIR}/roblox_state.db"
 
 declare -A PACKAGES
 
-# --- DISCORD ---
-
 discord() {
     local title="$1" desc="$2" color="${3:-3447003}" img="$4"
     [[ -z "$DISCORD_WEBHOOK" ]] && return
@@ -54,8 +52,6 @@ ss() {
     [[ -f "$p" ]] && echo "$p" || echo ""
 }
 
-# --- SQLITE ---
-
 db() { su -c "sqlite3 $STATE_FILE '$1' 2>/dev/null"; }
 
 init_db() {
@@ -64,8 +60,6 @@ init_db() {
 
 get() { db "SELECT value FROM state WHERE key='$1';" || echo ""; }
 set() { db "INSERT OR REPLACE INTO state(key,value) VALUES('$1','$2');" }
-
-# --- THERMAL ---
 
 thermal_off() {
     su -c "stop thermal-engine 2>/dev/null"
@@ -99,8 +93,6 @@ thermal_on() {
     su -c "start vendor.power-hal-1-0 2>/dev/null"
 }
 
-# --- CHECKS ---
-
 alive() {
     local pkg="$1" pids
     pids=$(su -c "ps -A | grep '$pkg' | grep -v grep | awk '{print \$2}'" 2>/dev/null)
@@ -133,8 +125,6 @@ frozen() {
     fi
     return 1
 }
-
-# --- ACTIONS ---
 
 launch() {
     local pkg="$1" name="$2"
@@ -188,8 +178,6 @@ cleanup() {
     rm -f "$PID_FILE"
 }
 
-# --- DAEMON ---
-
 if [[ "$1" == "daemon" ]]; then
     echo $$ > "$PID_FILE"
     init_db
@@ -204,7 +192,8 @@ if [[ "$1" == "daemon" ]]; then
     local i=0
     for pkg in "${!PACKAGES[@]}"; do
         launch "$pkg" "${PACKAGES[$pkg]}"
-        (( i++ )); (( i < ${#PACKAGES[@]} )) && sleep 5
+        (( i++ ))
+        (( i < ${#PACKAGES[@]} )) && sleep 5
     done
     
     while true; do
@@ -214,28 +203,66 @@ if [[ "$1" == "daemon" ]]; then
     exit 0
 fi
 
-# --- CLI ---
+if [[ "$1" == "start" ]]; then
+    [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null && { echo "❌ Running"; exit 1; }
+    nohup bash "$0" daemon >/dev/null 2>&1 &
+    sleep 1
+    [[ -f "$PID_FILE" ]] && echo "✅ Start" || echo "❌ Fail"
+    exit 0
+fi
 
-case "$1" in
-    start)
-        [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null && { echo "❌ Running"; exit 1; }
-        nohup bash "$0" daemon >/dev/null 2>&1 &
-        sleep 1; [[ -f "$PID_FILE" ]] && echo "✅ Start" || echo "❌ Fail"
-        ;;
-    stop)
-        [[ -f "$PID_FILE" ]] && { kill "$(cat "$PID_FILE")" 2>/dev/null; sleep 1; kill -9 "$(cat "$PID_FILE")" 2>/dev/null; }
-        cleanup; discord "🛑 Stop" "Manual off. Thermal restored." 15158332; echo "🛑 Stop"
-        ;;
-    restart) bash "$0" stop; sleep 2; bash "$0" start ;;
-    status)
-        [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null || { echo "🔴 Stop"; exit 0; }
-        echo "🟢 Running"
-        for pkg in "${!PACKAGES[@]}"; do alive "$pkg" && echo "   🟢 ${PACKAGES[$pkg]}" || echo "   🔴 ${PACKAGES[$pkg]}"; done
-        ;;
-    thermal-off) thermal_off; echo "🔥 Thermal disabled" ;;
-    thermal-on) thermal_on; echo "❄️ Thermal restored" ;;
-    test-webhook) [[ -z "$DISCORD_WEBHOOK" ]] && { echo "❌ No webhook"; exit 1; }; discord "🧪 Test" "Ok." 3447003; echo "✅ Sent" ;;
-    test-screenshot) local s; s=$(ss); [[ -n "$s" ]] && { echo "✅ $s"; discord "🧪 SS" "Test." 3447003 "$s"; } || echo "❌ Fail" ;;
-    reset-state) rm -f "$STATE_FILE"; echo "✅ Reset" ;;
-    *) echo "🎮 RobloxBot | start|stop|restart|status|thermal-off|thermal-on|test-webhook|test-screenshot|reset-state" ;;
-esac
+if [[ "$1" == "stop" ]]; then
+    [[ -f "$PID_FILE" ]] && { kill "$(cat "$PID_FILE")" 2>/dev/null; sleep 1; kill -9 "$(cat "$PID_FILE")" 2>/dev/null; }
+    cleanup
+    discord "🛑 Stop" "Manual off. Thermal restored." 15158332
+    echo "🛑 Stop"
+    exit 0
+fi
+
+if [[ "$1" == "restart" ]]; then
+    bash "$0" stop
+    sleep 2
+    bash "$0" start
+    exit 0
+fi
+
+if [[ "$1" == "status" ]]; then
+    [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null || { echo "🔴 Stop"; exit 0; }
+    echo "🟢 Running"
+    for pkg in "${!PACKAGES[@]}"; do alive "$pkg" && echo "   🟢 ${PACKAGES[$pkg]}" || echo "   🔴 ${PACKAGES[$pkg]}"; done
+    exit 0
+fi
+
+if [[ "$1" == "thermal-off" ]]; then
+    thermal_off
+    echo "🔥 Thermal disabled"
+    exit 0
+fi
+
+if [[ "$1" == "thermal-on" ]]; then
+    thermal_on
+    echo "❄️ Thermal restored"
+    exit 0
+fi
+
+if [[ "$1" == "test-webhook" ]]; then
+    [[ -z "$DISCORD_WEBHOOK" ]] && { echo "❌ No webhook"; exit 1; }
+    discord "🧪 Test" "Ok." 3447003
+    echo "✅ Sent"
+    exit 0
+fi
+
+if [[ "$1" == "test-screenshot" ]]; then
+    local s
+    s=$(ss)
+    [[ -n "$s" ]] && { echo "✅ $s"; discord "🧪 SS" "Test." 3447003 "$s"; } || echo "❌ Fail"
+    exit 0
+fi
+
+if [[ "$1" == "reset-state" ]]; then
+    rm -f "$STATE_FILE"
+    echo "✅ Reset"
+    exit 0
+fi
+
+echo "🎮 RobloxBot | start|stop|restart|status|thermal-off|thermal-on|test-webhook|test-screenshot|reset-state"
