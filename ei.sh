@@ -2,10 +2,6 @@
 
 set -o pipefail
 
-# ═══════════════════════════════════════════════════════
-#  CONFIG
-# ═══════════════════════════════════════════════════════
-
 PACKAGE_PREFIX="free.no"
 ROBLOX_URL="https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&type=Server"
 
@@ -20,10 +16,12 @@ DISCORD_PING_USER=""
 
 TMP_DIR="/data/data/com.termux/files/usr/tmp"
 PID_FILE="${TMP_DIR}/roblox_bot.pid"
-STATE_FILE="${TMP_DIR}/roblox_state.json"
+STATE_FILE="${TMP_DIR}/roblox_state.db"
+
+declare -A PACKAGES
 
 # ═══════════════════════════════════════════════════════
-#  UTILS
+#  DISCORD
 # ═══════════════════════════════════════════════════════
 
 discord() {
@@ -32,9 +30,9 @@ discord() {
     local ping=""; [[ -n "$DISCORD_PING_USER" ]] && ping="<@$DISCORD_PING_USER> "
     if [[ -n "$img" && -f "$img" ]]; then
         local b="----BotBoundary$(date +%s)"
-        { echo "--$b"; echo 'Content-Disposition: form-data; name="payload_json"'; echo 'Content-Type: application/json'; echo ""; echo "{\"content\":\"${ping}\",\"embeds\":[{\"title\":\"$title\",\"description\":\"$desc\",\"color\":$color,\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"footer\":{\"text\":\"Roblox Bot\"}}]}"; echo "--$b"; echo 'Content-Disposition: form-data; name="file"; filename="s.png"'; echo 'Content-Type: image/png'; echo ""; cat "$img"; echo ""; echo "--$b--"; } | curl -s -X POST -H "Content-Type: multipart/form-data; boundary=$b" --data-binary @- "$DISCORD_WEBHOOK" >/dev/null 2>&1
+        { echo "--$b"; echo 'Content-Disposition: form-data; name="payload_json"'; echo 'Content-Type: application/json'; echo ""; echo "{\"content\":\"${ping}\",\"embeds\":[{\"title\":\"$title\",\"description\":\"$desc\",\"color\":$color,\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"footer\":{\"text\":\"Roblox Bot\"}}]}"; echo "--$b"; echo 'Content-Disposition: form-data; name="file"; filename="s.png"'; echo 'Content-Type: image/png'; echo ""; cat "$img"; echo ""; echo "--$b--"; } | curl -s -X POST -H "Content-Type: multipart/form-data; boundary=$b" --data-binary @- "$DISCORD_WEBHOOK" >/dev/null 2>&1 &
     else
-        curl -s -H "Content-Type: application/json" -X POST -d "{\"content\":\"${ping}\",\"embeds\":[{\"title\":\"$title\",\"description\":\"$desc\",\"color\":$color,\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"footer\":{\"text\":\"Roblox Bot\"}}]}" "$DISCORD_WEBHOOK" >/dev/null 2>&1
+        curl -s -H "Content-Type: application/json" -X POST -d "{\"content\":\"${ping}\",\"embeds\":[{\"title\":\"$title\",\"description\":\"$desc\",\"color\":$color,\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"footer\":{\"text\":\"Roblox Bot\"}}]}" "$DISCORD_WEBHOOK" >/dev/null 2>&1 &
     fi
 }
 
@@ -45,80 +43,107 @@ ss() {
 }
 
 # ═══════════════════════════════════════════════════════
-#  STATE (JSON, safe parse)
+#  SQLITE STATE
 # ═══════════════════════════════════════════════════════
 
-state_load() {
-    [[ -f "$STATE_FILE" ]] || return
-    # Parse JSON simple: {"key":"value",...}
-    local content
-    content=$(cat "$STATE_FILE" 2>/dev/null)
-    [[ -z "$content" ]] && return
-    # Extract values dengan regex
-    RESTARTS_TODAY=$(echo "$content" | grep -o '"restarts_[^"]*":"[0-9]*"' | grep "$(date +%Y%m%d)" | grep -o '[0-9]*$' || echo 0)
-    LAST_CACHE=$(echo "$content" | grep -o '"last_cache":"[0-9]*"' | grep -o '[0-9]*$' || echo 0)
-    CPU_SNAPSHOT=$(echo "$content" | grep -o '"cpu":"[^"]*"' | sed 's/.*:"//;s/"$//' || echo "")
-    CPU_TIME=$(echo "$content" | grep -o '"cpu_time":"[0-9]*"' | grep -o '[0-9]*$' || echo 0)
+db() { su -c "sqlite3 $STATE_FILE '$1' 2>/dev/null"; }
+
+init_db() {
+    [[ -f "$STATE_FILE" ]] || db "CREATE TABLE state(key TEXT PRIMARY KEY, value TEXT);"
 }
 
-state_save() {
-    local r="${1:-0}" c="${2:-0}" cpu="${3:-}" ct="${4:-0}"
-    echo "{\"restarts_$(date +%Y%m%d)\":\"$r\",\"last_cache\":\"$c\",\"cpu\":\"$cpu\",\"cpu_time\":\"$ct\"}" > "$STATE_FILE"
+get() { db "SELECT value FROM state WHERE key='$1';" || echo ""; }
+set() { db "INSERT OR REPLACE INTO state(key,value) VALUES('$1','$2');" }
+
+# ═══════════════════════════════════════════════════════
+#  THERMAL DISABLE (ROOT)
+# ═══════════════════════════════════════════════════════
+
+thermal_off() {
+    # Disable thermal engine
+    su -c "stop thermal-engine 2>/dev/null"
+    su -c "stop thermald 2>/dev/null"
+    su -c "stop vendor.thermal-engine 2>/dev/null"
+    
+    # Freeze thermal config
+    su -c "find /system/etc -name '*thermal*' -exec chmod 000 {} \; 2>/dev/null"
+    su -c "find /vendor/etc -name '*thermal*' -exec chmod 000 {} \; 2>/dev/null"
+    
+    # Disable CPU freq limit
+    for cpu in /sys/devices/system/cpu/cpu*/cpufreq; do
+        su -c "echo performance > $cpu/scaling_governor 2>/dev/null"
+    done
+    
+    # Disable GPU throttling (Qualcomm/Adreno)
+    su -c "echo 0 > /sys/class/kgsl/kgsl-3d0/throttling 2>/dev/null"
+    su -c "echo 0 > /sys/class/kgsl/kgsl-3d0/bus_split 2>/dev/null"
+    su -c "echo 1 > /sys/class/kgsl/kgsl-3d0/force_clk_on 2>/dev/null"
+    su -c "echo 1 > /sys/class/kgsl/kgsl-3d0/force_bus_on 2>/dev/null"
+    su -c "echo 1 > /sys/class/kgsl/kgsl-3d0/force_rail_on 2>/dev/null"
+    
+    # Disable power HAL
+    su -c "stop power-hal-1-0 2>/dev/null"
+    su -c "stop vendor.power-hal-1-0 2>/dev/null"
+}
+
+thermal_on() {
+    # Re-enable thermal engine
+    su -c "start thermal-engine 2>/dev/null"
+    su -c "start thermald 2>/dev/null"
+    su -c "start vendor.thermal-engine 2>/dev/null"
+    
+    # Restore thermal config
+    su -c "find /system/etc -name '*thermal*' -exec chmod 644 {} \; 2>/dev/null"
+    su -c "find /vendor/etc -name '*thermal*' -exec chmod 644 {} \; 2>/dev/null"
+    
+    # Restore CPU governor
+    for cpu in /sys/devices/system/cpu/cpu*/cpufreq; do
+        su -c "echo schedutil > $cpu/scaling_governor 2>/dev/null"
+    done
+    
+    # Re-enable GPU throttling
+    su -c "echo 1 > /sys/class/kgsl/kgsl-3d0/throttling 2>/dev/null"
+    su -c "echo 1 > /sys/class/kgsl/kgsl-3d0/bus_split 2>/dev/null"
+    su -c "echo 0 > /sys/class/kgsl/kgsl-3d0/force_clk_on 2>/dev/null"
+    su -c "echo 0 > /sys/class/kgsl/kgsl-3d0/force_bus_on 2>/dev/null"
+    su -c "echo 0 > /sys/class/kgsl/kgsl-3d0/force_rail_on 2>/dev/null"
+    
+    # Re-enable power HAL
+    su -c "start power-hal-1-0 2>/dev/null"
+    su -c "start vendor.power-hal-1-0 2>/dev/null"
 }
 
 # ═══════════════════════════════════════════════════════
-#  CHECKS (reliable)
+#  CHECKS
 # ═══════════════════════════════════════════════════════
 
 alive() {
-    local pkg="$1"
-    # Cek 1: process ada & bukan zombie
-    local pids
+    local pkg="$1" pids
     pids=$(su -c "ps -A | grep '$pkg' | grep -v grep | awk '{print \$2}'" 2>/dev/null)
     [[ -z "$pids" ]] && return 1
-    
-    # Cek semua PID, kalau ada yang alive & bukan zombie → running
-    local any_alive=0
     for pid in $pids; do
-        local st
-        st=$(su -c "cat /proc/$pid/stat 2>/dev/null | awk '{print \$3}'" 2>/dev/null)
+        local st=$(su -c "cat /proc/$pid/stat 2>/dev/null | awk '{print \$3}'" 2>/dev/null)
         [[ "$st" == "Z" ]] && continue
-        [[ -d "/proc/$pid" ]] && any_alive=1
+        [[ -d "/proc/$pid" ]] && break
     done
-    [[ "$any_alive" == "0" ]] && return 1
-    
-    # Cek 2: activity state (RESUMED/PAUSED/STOPPED, bukan DESTROYED)
-    local act
-    act=$(su -c "dumpsys activity activities 2>/dev/null | grep -E '$pkg.*(Resumed|Paused|Stopped)' | grep -v ' finishing' | grep -v ' destroyed' | head -1" 2>/dev/null)
+    local act=$(su -c "dumpsys activity activities 2>/dev/null | grep -E '$pkg.*(Resumed|Paused|Stopped)' | grep -v ' finishing' | grep -v ' destroyed' | head -1" 2>/dev/null)
     [[ -n "$act" ]] && return 0
-    
-    # Cek 3: fallback window (kalau activity ga ketemu, cek window)
     su -c "dumpsys window windows 2>/dev/null | grep -q '$pkg'" 2>/dev/null
 }
 
 frozen() {
-    local pkg="$1"
-    local pids
-    pids=$(su -c "ps -A | grep '$pkg' | grep -v grep | awk '{print \$2}'" 2>/dev/null)
-    [[ -z "$pids" ]] && return 1
-    
-    # Ambil PID pertama yang bukan zombie
-    local pid=""
-    for p in $pids; do
-        local st=$(su -c "cat /proc/$p/stat 2>/dev/null | awk '{print \$3}'" 2>/dev/null)
-        [[ "$st" != "Z" ]] && { pid="$p"; break; }
-    done
+    local pkg="$1" pid
+    pid=$(su -c "pidof $pkg 2>/dev/null | awk '{print $1}'")
     [[ -z "$pid" ]] && return 1
-    
-    local cpu
-    cpu=$(su -c "cat /proc/$pid/stat 2>/dev/null | awk '{print \$14+\$15}'" 2>/dev/null)
+    local cpu=$(su -c "cat /proc/$pid/stat 2>/dev/null | awk '{print \$14+\$15}'" 2>/dev/null)
     [[ -z "$cpu" ]] && return 1
-    
-    state_load
-    if [[ -n "$CPU_SNAPSHOT" && "$CPU_SNAPSHOT" == "$cpu" ]]; then
-        [[ $(date +%s) - ${CPU_TIME:-0} -ge $FREEZE_THRESHOLD ]] && return 0
+    local last=$(get "cpu_$pkg")
+    local last_t=$(get "cpu_t_$pkg")
+    if [[ -n "$last" && "$last" == "$cpu" ]]; then
+        [[ $(date +%s) - ${last_t:-0} -ge $FREEZE_THRESHOLD ]] && return 0
     else
-        state_save "$RESTARTS_TODAY" "$LAST_CACHE" "$cpu" "$(date +%s)"
+        set "cpu_$pkg" "$cpu"
+        set "cpu_t_$pkg" "$(date +%s)"
     fi
     return 1
 }
@@ -130,22 +155,16 @@ frozen() {
 launch() {
     local pkg="$1" name="$2"
     alive "$pkg" && { discord "ℹ️ Info" "**$name** sudah running." 3447003; return 0; }
-    
-    # Kill & clear cache
     su -c "am force-stop $pkg 2>/dev/null"; sleep 2
     su -c "find /data/data/$pkg -maxdepth 1 -type d -iname '*cache*' -exec rm -rf {}/\* 2>/dev/null \;" 2>/dev/null
     [[ -d "/sdcard/Android/data/$pkg/cache" ]] && su -c "rm -rf /sdcard/Android/data/$pkg/cache/*" 2>/dev/null
-    
-    # Launch
     su -c "am start -a android.intent.action.VIEW -d '$ROBLOX_URL' -p $pkg" >/dev/null 2>&1
-    
-    # Wait with progress check
     local e=0
     while (( e < LAUNCH_TIMEOUT )); do
         alive "$pkg" && { discord "✅ Launched" "**$name** berhasil dibuka." 3066993; return 0; }
         sleep 3; ((e += 3))
     done
-    discord "❌ Failed" "**$name** gagal dibuka dalam ${LAUNCH_TIMEOUT}s." 16711680
+    discord "❌ Failed" "**$name** gagal dibuka." 16711680
     return 1
 }
 
@@ -155,35 +174,34 @@ launch() {
 
 monitor() {
     local pkg="$1" name="$2"
-    state_load
-    local r="${RESTARTS_TODAY:-0}"
+    local r=$(get "r_$(date +%Y%m%d)_$pkg")
+    r=${r:-0}
     
-    # Check crash
     if ! alive "$pkg"; then
         (( r >= MAX_RESTARTS )) && { discord "⚠️ Max" "**$name** skip ($r/$MAX_RESTARTS)." 15158332; return; }
         discord "💀 Crash" "**$name** crash! Restart..." 16711680 "$(ss)"
-        launch "$pkg" "$name" && { state_save "$((r+1))" "$LAST_CACHE" "$CPU_SNAPSHOT" "$CPU_TIME"; discord "🚀 Restart" "**$name** ok. ($((r+1))/$MAX_RESTARTS)" 3066993; }
+        launch "$pkg" "$name" && { set "r_$(date +%Y%m%d)_$pkg" "$((r+1))"; discord "🚀 Restart" "**$name** ok. ($((r+1))/$MAX_RESTARTS)" 3066993; }
         return
     fi
     
-    # Check freeze
     if frozen "$pkg"; then
         (( r >= MAX_RESTARTS )) && { discord "⚠️ Max" "**$name** skip freeze ($r/$MAX_RESTARTS)." 15158332; return; }
         discord "🥶 Freeze" "**$name** freeze! Restart..." 16711680 "$(ss)"
-        launch "$pkg" "$name" && { state_save "$((r+1))" "$LAST_CACHE" "$CPU_SNAPSHOT" "$CPU_TIME"; discord "🚀 Restart" "**$name** ok (freeze)." 3066993; }
+        launch "$pkg" "$name" && { set "r_$(date +%Y%m%d)_$pkg" "$((r+1))"; discord "🚀 Restart" "**$name** ok (freeze)." 3066993; }
         return
     fi
     
-    # Cache clear
-    if [[ "$CACHE_INTERVAL" != "0" ]] && [[ $(date +%s) - ${LAST_CACHE:-0} -ge $CACHE_INTERVAL ]]; then
+    local last_c=$(get "c_$pkg")
+    if [[ "$CACHE_INTERVAL" != "0" ]] && [[ $(date +%s) - ${last_c:-0} -ge $CACHE_INTERVAL ]]; then
         discord "🧹 Cache" "**$name** cache clear." 3447003
-        launch "$pkg" "$name" && { state_save "$r" "$(date +%s)" "$CPU_SNAPSHOT" "$CPU_TIME"; discord "🚀 Relaunch" "**$name** ok (cache)." 3066993; }
+        launch "$pkg" "$name" && { set "c_$pkg" "$(date +%s)"; discord "🚀 Relaunch" "**$name** ok (cache)." 3066993; }
     fi
 }
 
 cleanup() {
-    for pkg in "${PACKAGES[@]}"; do su -c "am force-stop $pkg 2>/dev/null"; done
-    rm -f "$PID_FILE" "$STATE_FILE"
+    for pkg in "${!PACKAGES[@]}"; do su -c "am force-stop $pkg 2>/dev/null"; done
+    thermal_on
+    rm -f "$PID_FILE"
 }
 
 # ═══════════════════════════════════════════════════════
@@ -192,21 +210,23 @@ cleanup() {
 
 if [[ "$1" == "daemon" ]]; then
     echo $$ > "$PID_FILE"
-    trap 'cleanup; discord "🛑 Stopped" "Bot off." 15158332; exit 0' SIGTERM SIGINT
+    init_db
+    thermal_off
+    trap 'cleanup; discord "🛑 Stopped" "Bot off. Thermal restored." 15158332; exit 0' SIGTERM SIGINT
     
-    PACKAGES=()
-    while IFS= read -r pkg; do PACKAGES+=("$pkg"); done < <(su -c "pm list packages" | grep "^package:${PACKAGE_PREFIX}" | sed 's/package://')
+    while IFS= read -r pkg; do PACKAGES["$pkg"]="${pkg##*.}"; done < <(su -c "pm list packages" | grep "^package:${PACKAGE_PREFIX}" | sed 's/package://')
     [[ ${#PACKAGES[@]} -eq 0 ]] && { discord "❌ Error" "No packages found." 16711680; exit 1; }
     
-    discord "🚀 Start" "Bot on: **${#PACKAGES[@]}** instances." 3066993
+    discord "🚀 Start" "Bot on: **${#PACKAGES[@]}** instances.\n🔥 Thermal: DISABLED" 3066993
     
-    for i in "${!PACKAGES[@]}"; do
-        launch "${PACKAGES[$i]}" "${PACKAGES[$i]##*.}"
-        (( i < ${#PACKAGES[@]} - 1 )) && sleep 5
+    local i=0
+    for pkg in "${!PACKAGES[@]}"; do
+        launch "$pkg" "${PACKAGES[$pkg]}"
+        (( i++ )); (( i < ${#PACKAGES[@]} )) && sleep 5
     done
     
     while true; do
-        for pkg in "${PACKAGES[@]}"; do monitor "$pkg" "${pkg##*.}"; done
+        for pkg in "${!PACKAGES[@]}"; do monitor "$pkg" "${PACKAGES[$pkg]}"; done
         sleep "$CHECK_INTERVAL"
     done
     exit 0
@@ -218,29 +238,24 @@ fi
 
 case "$1" in
     start)
-        [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null && { discord "❌ Error" "Already running." 16711680; echo "❌ Running"; exit 1; }
+        [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null && { echo "❌ Running"; exit 1; }
         nohup bash "$0" daemon >/dev/null 2>&1 &
-        sleep 1; [[ -f "$PID_FILE" ]] && { discord "✅ Start" "Daemon started." 3066993; echo "✅ Start"; } || { echo "❌ Fail"; exit 1; }
+        sleep 1; [[ -f "$PID_FILE" ]] && echo "✅ Start" || echo "❌ Fail"
         ;;
     stop)
         [[ -f "$PID_FILE" ]] && { kill "$(cat "$PID_FILE")" 2>/dev/null; sleep 1; kill -9 "$(cat "$PID_FILE")" 2>/dev/null; }
-        cleanup; discord "🛑 Stop" "Manual off." 15158332; echo "🛑 Stop"
+        cleanup; discord "🛑 Stop" "Manual off. Thermal restored." 15158332; echo "🛑 Stop"
         ;;
     restart) bash "$0" stop; sleep 2; bash "$0" start ;;
     status)
         [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null || { echo "🔴 Stop"; exit 0; }
         echo "🟢 Running"
-        for pkg in "${PACKAGES[@]}"; do
-            alive "$pkg" && echo "   🟢 ${pkg##*.}" || echo "   🔴 ${pkg##*.}"
-        done
+        for pkg in "${!PACKAGES[@]}"; do alive "$pkg" && echo "   🟢 ${PACKAGES[$pkg]}" || echo "   🔴 ${PACKAGES[$pkg]}"; done
         ;;
-    test-webhook)
-        [[ -z "$DISCORD_WEBHOOK" ]] && { echo "❌ No webhook"; exit 1; }
-        discord "🧪 Test" "Ok." 3447003; echo "✅ Sent"
-        ;;
-    test-screenshot)
-        local s; s=$(ss); [[ -n "$s" ]] && { echo "✅ $s"; discord "🧪 SS" "Test." 3447003 "$s"; } || echo "❌ Fail"
-        ;;
+    thermal-off) thermal_off; echo "🔥 Thermal disabled" ;;
+    thermal-on) thermal_on; echo "❄️ Thermal restored" ;;
+    test-webhook) [[ -z "$DISCORD_WEBHOOK" ]] && { echo "❌ No webhook"; exit 1; }; discord "🧪 Test" "Ok." 3447003; echo "✅ Sent" ;;
+    test-screenshot) local s; s=$(ss); [[ -n "$s" ]] && { echo "✅ $s"; discord "🧪 SS" "Test." 3447003 "$s"; } || echo "❌ Fail" ;;
     reset-state) rm -f "$STATE_FILE"; echo "✅ Reset" ;;
-    *) echo "🎮 RobloxBot | start|stop|restart|status|test-webhook|test-screenshot|reset-state" ;;
+    *) echo "🎮 RobloxBot | start|stop|restart|status|thermal-off|thermal-on|test-webhook|test-screenshot|reset-state" ;;
 esac
