@@ -140,14 +140,15 @@ frozen() {
     local last=$(get "cpu_$pkg")
     local last_t=$(get "cpu_t_$pkg")
     if [[ -n "$last" && "$last" == "$cpu" ]]; then
-        [[ $(date +%s) - ${last_t:-0} -ge $FREEZE_THRESHOLD ]] && return 0
+        local now=$(date +%s)
+        local diff=$(( now - ${last_t:-0} ))
+        [[ $diff -ge $FREEZE_THRESHOLD ]] && return 0
     else
         set "cpu_$pkg" "$cpu"
         set "cpu_t_$pkg" "$(date +%s)"
     fi
     return 1
 }
-
 # ═══════════════════════════════════════════════════════
 #  ACTIONS
 # ═══════════════════════════════════════════════════════
