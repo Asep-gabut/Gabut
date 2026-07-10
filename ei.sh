@@ -18,8 +18,6 @@ TMP_DIR="/data/data/com.termux/files/usr/tmp"
 PID_FILE="${TMP_DIR}/roblox_bot.pid"
 STATE_FILE="${TMP_DIR}/roblox_state.db"
 
-declare -A PACKAGES
-
 discord() {
     local title="$1" desc="$2" color="${3:-3447003}" img="$4"
     [[ -z "$DISCORD_WEBHOOK" ]] && return
@@ -53,13 +51,9 @@ ss() {
 }
 
 db() { su -c "sqlite3 $STATE_FILE '$1' 2>/dev/null"; }
-
-init_db() {
-    [[ -f "$STATE_FILE" ]] || db "CREATE TABLE state(key TEXT PRIMARY KEY, value TEXT);"
-}
-
+init_db() { [[ -f "$STATE_FILE" ]] || db "CREATE TABLE state(key TEXT PRIMARY KEY, value TEXT);"; }
 get() { db "SELECT value FROM state WHERE key='$1';" || echo ""; }
-set() { db "INSERT OR REPLACE INTO state(key,value) VALUES('$1','$2');" }
+set() { db "INSERT OR REPLACE INTO state(key,value) VALUES('$1','$2');"; }
 
 thermal_off() {
     su -c "stop thermal-engine 2>/dev/null"
@@ -128,17 +122,16 @@ frozen() {
 
 launch() {
     local pkg="$1" name="$2"
-    alive "$pkg" && { discord "ℹ️ Info" "**$name** sudah running." 3447003; return 0; }
+    alive "$pkg" && return 0
     su -c "am force-stop $pkg 2>/dev/null"; sleep 2
     su -c "find /data/data/$pkg -maxdepth 1 -type d -iname '*cache*' -exec rm -rf {}/\* 2>/dev/null \;" 2>/dev/null
     [[ -d "/sdcard/Android/data/$pkg/cache" ]] && su -c "rm -rf /sdcard/Android/data/$pkg/cache/*" 2>/dev/null
     su -c "am start -a android.intent.action.VIEW -d '$ROBLOX_URL' -p $pkg" >/dev/null 2>&1
     local e=0
     while (( e < LAUNCH_TIMEOUT )); do
-        alive "$pkg" && { discord "✅ Launched" "**$name** berhasil dibuka." 3066993; return 0; }
+        alive "$pkg" && return 0
         sleep 3; ((e += 3))
     done
-    discord "❌ Failed" "**$name** gagal dibuka." 16711680
     return 1
 }
 
@@ -150,14 +143,20 @@ monitor() {
     if ! alive "$pkg"; then
         (( r >= MAX_RESTARTS )) && { discord "⚠️ Max" "**$name** skip ($r/$MAX_RESTARTS)." 15158332; return; }
         discord "💀 Crash" "**$name** crash! Restart..." 16711680 "$(ss)"
-        launch "$pkg" "$name" && { set "r_$(date +%Y%m%d)_$pkg" "$((r+1))"; discord "🚀 Restart" "**$name** ok. ($((r+1))/$MAX_RESTARTS)" 3066993; }
+        if launch "$pkg" "$name"; then
+            set "r_$(date +%Y%m%d)_$pkg" "$((r+1))"
+            discord "🚀 Restart" "**$name** ok. ($((r+1))/$MAX_RESTARTS)" 3066993
+        fi
         return
     fi
     
     if frozen "$pkg"; then
         (( r >= MAX_RESTARTS )) && { discord "⚠️ Max" "**$name** skip freeze ($r/$MAX_RESTARTS)." 15158332; return; }
         discord "🥶 Freeze" "**$name** freeze! Restart..." 16711680 "$(ss)"
-        launch "$pkg" "$name" && { set "r_$(date +%Y%m%d)_$pkg" "$((r+1))"; discord "🚀 Restart" "**$name** ok (freeze)." 3066993; }
+        if launch "$pkg" "$name"; then
+            set "r_$(date +%Y%m%d)_$pkg" "$((r+1))"
+            discord "🚀 Restart" "**$name** ok (freeze)." 3066993
+        fi
         return
     fi
     
@@ -167,102 +166,86 @@ monitor() {
         local diff=$(( now - ${last_c:-0} ))
         if [[ $diff -ge $CACHE_INTERVAL ]]; then
             discord "🧹 Cache" "**$name** cache clear." 3447003
-            launch "$pkg" "$name" && { set "c_$pkg" "$(date +%s)"; discord "🚀 Relaunch" "**$name** ok (cache)." 3066993; }
+            if launch "$pkg" "$name"; then
+                set "c_$pkg" "$(date +%s)"
+                discord "🚀 Relaunch" "**$name** ok (cache)." 3066993
+            fi
         fi
     fi
 }
 
 cleanup() {
-    for pkg in "${!PACKAGES[@]}"; do su -c "am force-stop $pkg 2>/dev/null"; done
+    for pkg in "${PACKAGES[@]}"; do su -c "am force-stop $pkg 2>/dev/null"; done
     thermal_on
     rm -f "$PID_FILE"
 }
 
+# DAEMON
 if [[ "$1" == "daemon" ]]; then
     echo $$ > "$PID_FILE"
     init_db
     thermal_off
-    trap 'cleanup; discord "🛑 Stopped" "Bot off. Thermal restored." 15158332; exit 0' SIGTERM SIGINT
+    trap 'cleanup; discord "🛑 Stopped" "Bot off." 15158332; exit 0' SIGTERM SIGINT
     
-    while IFS= read -r pkg; do PACKAGES["$pkg"]="${pkg##*.}"; done < <(su -c "pm list packages" | grep "^package:${PACKAGE_PREFIX}" | sed 's/package://')
+    PACKAGES=()
+    while IFS= read -r pkg; do PACKAGES+=("$pkg"); done < <(su -c "pm list packages" | grep "^package:${PACKAGE_PREFIX}" | sed 's/package://')
     [[ ${#PACKAGES[@]} -eq 0 ]] && { discord "❌ Error" "No packages found." 16711680; exit 1; }
     
     discord "🚀 Start" "Bot on: **${#PACKAGES[@]}** instances.\n🔥 Thermal: DISABLED" 3066993
     
     local i=0
-    for pkg in "${!PACKAGES[@]}"; do
-        launch "$pkg" "${PACKAGES[$pkg]}"
-        (( i++ ))
-        (( i < ${#PACKAGES[@]} )) && sleep 5
+    for pkg in "${PACKAGES[@]}"; do
+        launch "$pkg" "${pkg##*.}"
+        (( i++ )); (( i < ${#PACKAGES[@]} )) && sleep 5
     done
     
     while true; do
-        for pkg in "${!PACKAGES[@]}"; do monitor "$pkg" "${PACKAGES[$pkg]}"; done
+        for pkg in "${PACKAGES[@]}"; do monitor "$pkg" "${pkg##*.}"; done
         sleep "$CHECK_INTERVAL"
     done
     exit 0
 fi
 
+# CLI
 if [[ "$1" == "start" ]]; then
     [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null && { echo "❌ Running"; exit 1; }
     nohup bash "$0" daemon >/dev/null 2>&1 &
-    sleep 1
-    [[ -f "$PID_FILE" ]] && echo "✅ Start" || echo "❌ Fail"
+    sleep 1; [[ -f "$PID_FILE" ]] && echo "✅ Start" || echo "❌ Fail"
     exit 0
 fi
 
 if [[ "$1" == "stop" ]]; then
     [[ -f "$PID_FILE" ]] && { kill "$(cat "$PID_FILE")" 2>/dev/null; sleep 1; kill -9 "$(cat "$PID_FILE")" 2>/dev/null; }
-    cleanup
-    discord "🛑 Stop" "Manual off. Thermal restored." 15158332
-    echo "🛑 Stop"
+    cleanup; discord "🛑 Stop" "Manual off." 15158332; echo "🛑 Stop"
     exit 0
 fi
 
 if [[ "$1" == "restart" ]]; then
-    bash "$0" stop
-    sleep 2
-    bash "$0" start
+    bash "$0" stop; sleep 2; bash "$0" start
     exit 0
 fi
 
 if [[ "$1" == "status" ]]; then
     [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null || { echo "🔴 Stop"; exit 0; }
     echo "🟢 Running"
-    for pkg in "${!PACKAGES[@]}"; do alive "$pkg" && echo "   🟢 ${PACKAGES[$pkg]}" || echo "   🔴 ${PACKAGES[$pkg]}"; done
+    for pkg in "${PACKAGES[@]}"; do alive "$pkg" && echo "   🟢 ${pkg##*.}" || echo "   🔴 ${pkg##*.}"; done
     exit 0
 fi
 
-if [[ "$1" == "thermal-off" ]]; then
-    thermal_off
-    echo "🔥 Thermal disabled"
-    exit 0
-fi
-
-if [[ "$1" == "thermal-on" ]]; then
-    thermal_on
-    echo "❄️ Thermal restored"
-    exit 0
-fi
+if [[ "$1" == "thermal-off" ]]; then thermal_off; echo "🔥 Thermal disabled"; exit 0; fi
+if [[ "$1" == "thermal-on" ]]; then thermal_on; echo "❄️ Thermal restored"; exit 0; fi
 
 if [[ "$1" == "test-webhook" ]]; then
     [[ -z "$DISCORD_WEBHOOK" ]] && { echo "❌ No webhook"; exit 1; }
-    discord "🧪 Test" "Ok." 3447003
-    echo "✅ Sent"
+    discord "🧪 Test" "Ok." 3447003; echo "✅ Sent"
     exit 0
 fi
 
 if [[ "$1" == "test-screenshot" ]]; then
-    local s
-    s=$(ss)
-    [[ -n "$s" ]] && { echo "✅ $s"; discord "🧪 SS" "Test." 3447003 "$s"; } || echo "❌ Fail"
+    local s; s=$(ss); [[ -n "$s" ]] && { echo "✅ $s"; discord "🧪 SS" "Test." 3447003 "$s"; } || echo "❌ Fail"
     exit 0
 fi
 
-if [[ "$1" == "reset-state" ]]; then
-    rm -f "$STATE_FILE"
-    echo "✅ Reset"
-    exit 0
-fi
+if [[ "$1" == "reset-state" ]]; then rm -f "$STATE_FILE"; echo "✅ Reset"; exit 0; fi
 
 echo "🎮 RobloxBot | start|stop|restart|status|thermal-off|thermal-on|test-webhook|test-screenshot|reset-state"
