@@ -55,38 +55,6 @@ init_db() { [[ -f "$STATE_FILE" ]] || db "CREATE TABLE state(key TEXT PRIMARY KE
 get() { db "SELECT value FROM state WHERE key='$1';" || echo ""; }
 set() { db "INSERT OR REPLACE INTO state(key,value) VALUES('$1','$2');"; }
 
-thermal_off() {
-    su -c "stop thermal-engine 2>/dev/null"
-    su -c "stop thermald 2>/dev/null"
-    su -c "stop vendor.thermal-engine 2>/dev/null"
-    for cpu in /sys/devices/system/cpu/cpu*/cpufreq; do
-        su -c "echo performance > $cpu/scaling_governor 2>/dev/null"
-    done
-    su -c "echo 0 > /sys/class/kgsl/kgsl-3d0/throttling 2>/dev/null"
-    su -c "echo 0 > /sys/class/kgsl/kgsl-3d0/bus_split 2>/dev/null"
-    su -c "echo 1 > /sys/class/kgsl/kgsl-3d0/force_clk_on 2>/dev/null"
-    su -c "echo 1 > /sys/class/kgsl/kgsl-3d0/force_bus_on 2>/dev/null"
-    su -c "echo 1 > /sys/class/kgsl/kgsl-3d0/force_rail_on 2>/dev/null"
-    su -c "stop power-hal-1-0 2>/dev/null"
-    su -c "stop vendor.power-hal-1-0 2>/dev/null"
-}
-
-thermal_on() {
-    su -c "start thermal-engine 2>/dev/null"
-    su -c "start thermald 2>/dev/null"
-    su -c "start vendor.thermal-engine 2>/dev/null"
-    for cpu in /sys/devices/system/cpu/cpu*/cpufreq; do
-        su -c "echo schedutil > $cpu/scaling_governor 2>/dev/null"
-    done
-    su -c "echo 1 > /sys/class/kgsl/kgsl-3d0/throttling 2>/dev/null"
-    su -c "echo 1 > /sys/class/kgsl/kgsl-3d0/bus_split 2>/dev/null"
-    su -c "echo 0 > /sys/class/kgsl/kgsl-3d0/force_clk_on 2>/dev/null"
-    su -c "echo 0 > /sys/class/kgsl/kgsl-3d0/force_bus_on 2>/dev/null"
-    su -c "echo 0 > /sys/class/kgsl/kgsl-3d0/force_rail_on 2>/dev/null"
-    su -c "start power-hal-1-0 2>/dev/null"
-    su -c "start vendor.power-hal-1-0 2>/dev/null"
-}
-
 alive() {
     local pkg="$1" pids
     pids=$(su -c "ps -A | grep '$pkg' | grep -v grep | awk '{print \$2}'" 2>/dev/null)
@@ -176,22 +144,19 @@ monitor() {
 
 cleanup() {
     for pkg in "${PACKAGES[@]}"; do su -c "am force-stop $pkg 2>/dev/null"; done
-    thermal_on
     rm -f "$PID_FILE"
 }
 
-# DAEMON
 if [[ "$1" == "daemon" ]]; then
     echo $$ > "$PID_FILE"
     init_db
-    thermal_off
     trap 'cleanup; discord "🛑 Stopped" "Bot off." 15158332; exit 0' SIGTERM SIGINT
     
     PACKAGES=()
     while IFS= read -r pkg; do PACKAGES+=("$pkg"); done < <(su -c "pm list packages" | grep "^package:${PACKAGE_PREFIX}" | sed 's/package://')
     [[ ${#PACKAGES[@]} -eq 0 ]] && { discord "❌ Error" "No packages found." 16711680; exit 1; }
     
-    discord "🚀 Start" "Bot on: **${#PACKAGES[@]}** instances.\n🔥 Thermal: DISABLED" 3066993
+    discord "🚀 Start" "Bot on: **${#PACKAGES[@]}** instances." 3066993
     
     local i=0
     for pkg in "${PACKAGES[@]}"; do
@@ -206,7 +171,6 @@ if [[ "$1" == "daemon" ]]; then
     exit 0
 fi
 
-# CLI
 if [[ "$1" == "start" ]]; then
     [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null && { echo "❌ Running"; exit 1; }
     nohup bash "$0" daemon >/dev/null 2>&1 &
@@ -232,9 +196,6 @@ if [[ "$1" == "status" ]]; then
     exit 0
 fi
 
-if [[ "$1" == "thermal-off" ]]; then thermal_off; echo "🔥 Thermal disabled"; exit 0; fi
-if [[ "$1" == "thermal-on" ]]; then thermal_on; echo "❄️ Thermal restored"; exit 0; fi
-
 if [[ "$1" == "test-webhook" ]]; then
     [[ -z "$DISCORD_WEBHOOK" ]] && { echo "❌ No webhook"; exit 1; }
     discord "🧪 Test" "Ok." 3447003; echo "✅ Sent"
@@ -246,6 +207,8 @@ if [[ "$1" == "test-screenshot" ]]; then
     exit 0
 fi
 
-if [[ "$1" == "reset-state" ]]; then rm -f "$STATE_FILE"; echo "✅ Reset"; exit 0; fi
+if [[ "$1" == "reset-state" ]]; then
+    rm -f "$STATE_FILE"; echo "✅ Reset"; exit 0
+fi
 
-echo "🎮 RobloxBot | start|stop|restart|status|thermal-off|thermal-on|test-webhook|test-screenshot|reset-state"
+echo "🎮 RobloxBot | start|stop|restart|status|test-webhook|test-screenshot|reset-state"
