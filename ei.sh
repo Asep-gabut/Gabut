@@ -5,8 +5,8 @@ set -o pipefail
 PACKAGE_PREFIX="free.no"
 ROBLOX_URL="https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&type=Server"
 
-CHECK_INTERVAL=3
-CACHE_INTERVAL=3
+CHECK_INTERVAL=2
+CACHE_INTERVAL=2
 
 DISCORD_WEBHOOK="https://discord.com/api/webhooks/1483451715104804964/o0vgYLS-zg4WUXHQM-GiaT0idCfzz-bqPAqRXi4ME0xjEQusxdA3zmEdRQIzUiHovOb3"
 DISCORD_PING_USER=""
@@ -132,17 +132,17 @@ launch() {
 clear_cache() {
     local pkg="$1"
 
-    # Internal cache (data/data/pkg/*cache*)
-    su -c "find /data/data/$pkg -maxdepth 2 -type d \( -iname 'cache' -o -iname '*webview*' -o -iname '*http*cache*' \) 2>/dev/null | while read d; do rm -rf \"\$d\"/* \"\$d\"/.[^.]* 2>/dev/null; done" 2>/dev/null
+    su -c "find /data/data/$pkg -maxdepth 2 -type d \( -name 'cache' -o -name 'code_cache' \) 2>/dev/null | while read d; do
+        # Skip kalau folder ada file session-related
+        case \"\$d\" in
+            *session*|*auth*|*login*) continue ;;
+        esac
+        rm -rf \"\$d\"/* 2>/dev/null
+    done" 2>/dev/null
 
-    # External cache
-    [[ -d "/sdcard/Android/data/$pkg/cache" ]] && su -c "rm -rf /sdcard/Android/data/$pkg/cache/* 2>/dev/null"
-    [[ -d "/sdcard/Android/data/$pkg/files/cache" ]] && su -c "rm -rf /sdcard/Android/data/$pkg/files/cache/* 2>/dev/null"
-
-    # Drop kernel caches (optional, ringanin RAM)
+    # Drop kernel caches
     su -c "echo 3 > /proc/sys/vm/drop_caches 2>/dev/null"
 }
-
 # ============================================================
 # KILL UNWANTED APPS
 # ============================================================
