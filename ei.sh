@@ -208,7 +208,7 @@ if [[ "$1" == "daemon" ]]; then
     for pkg in "${PACKAGES[@]}"; do
         su -c "am force-stop $pkg 2>/dev/null"
     done
-    sleep 6
+    sleep 20
 
     local i=0
     for pkg in "${PACKAGES[@]}"; do
