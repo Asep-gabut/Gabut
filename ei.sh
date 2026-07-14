@@ -13,15 +13,10 @@ PACKAGE_PREFIX="free.no"
 ROBLOX_URL="https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&type=Server"
 
 # ============================================================
-# INTERVAL SETTINGS — SIMPLE (cuma 3)
+# INTERVAL SETTINGS
 # ============================================================
-CHECK_INTERVAL=2          # Cek crash tiap 2 detik (RINGAN)
-HEAVY_INTERVAL=60         # Heavy task tiap 1 menit (BERAT)
-UPDATE_INTERVAL=5        # Update downtime tiap 30 detik
-
-# Internal intervals (timestamp-based)
-KILL_INTERVAL=120         # Kill unwanted tiap 2 menit
-CACHE_INTERVAL=600        # Clear cache tiap 10 menit
+CHECK_INTERVAL=2          # Cek crash tiap 2 detik
+UPDATE_INTERVAL=5         # Update downtime tiap 5 detik
 PROTECT_INTERVAL=300      # Protect tiap 5 menit
 
 DISCORD_WEBHOOK="https://discord.com/api/webhooks/1483451715104804964/o0vgYLS-zg4WUXHQM-GiaT0idCfzz-bqPAqRXi4ME0xjEQusxdA3zmEdRQIzUiHovOb3"
@@ -30,7 +25,6 @@ DISCORD_PING_USER=""
 TMP_DIR="/data/data/com.termux/files/usr/tmp"
 PID_FILE="${TMP_DIR}/roblox_bot.pid"
 STATE_FILE="${TMP_DIR}/roblox_state.db"
-HEAVY_LOCK="${TMP_DIR}/heavy.lock"
 
 ALLOWED_PKGS=("com.termux" "$PACKAGE_PREFIX")
 
@@ -79,7 +73,7 @@ discord() {
 }
 
 # ============================================================
-# SCREENSHOT — ROOT: langsung
+# SCREENSHOT
 # ============================================================
 ss() {
     local p="${TMP_DIR}/rb_$(date +%s)_$$.png"
@@ -88,7 +82,7 @@ ss() {
 }
 
 # ============================================================
-# SQLITE STATE DB — ROOT: langsung
+# SQLITE STATE DB
 # ============================================================
 db() { sqlite3 "$STATE_FILE" "$1" 2>/dev/null; }
 init_db() { [[ -f "$STATE_FILE" ]] || db "CREATE TABLE state(key TEXT PRIMARY KEY, value TEXT);"; }
@@ -111,30 +105,26 @@ format_duration() {
 }
 
 # ============================================================
-# CHECK APP ALIVE — ROOT OPTIMIZED
+# CHECK APP ALIVE
 # ============================================================
 alive() {
     local pkg="$1"
     local pid
 
-    # ROOT: pidof paling cepat untuk exact match
     pid=$(pidof "$pkg" 2>/dev/null)
     [[ -z "$pid" ]] && pid=$(pgrep -f "^$pkg" 2>/dev/null | head -1)
     [[ -z "$pid" ]] && return 1
 
-    # ROOT: baca /proc langsung
     [[ -d "/proc/$pid" ]] || return 1
 
-    # ROOT: baca stat langsung
     local st=$(awk '{print $3}' /proc/$pid/stat 2>/dev/null)
     [[ "$st" == "Z" ]] && return 1
 
-    # HIDUP — nggak perlu dumpsys (bikin false detect)
     return 0
 }
 
 # ============================================================
-# LAUNCH APP — ROOT: langsung
+# LAUNCH APP
 # ============================================================
 launch() {
     local pkg="$1" name="$2"
@@ -143,22 +133,7 @@ launch() {
 }
 
 # ============================================================
-# CLEAR CACHE — ROOT: langsung, gentle
-# ============================================================
-clear_cache() {
-    local pkg="$1"
-    # ROOT: langsung, nggak perlu su
-    find "/data/data/$pkg" -maxdepth 2 -type d \( -name 'cache' -o -name 'code_cache' \) 2>/dev/null | while read d; do
-        case "$d" in
-            *session*|*auth*|*login*) continue ;;
-        esac
-        # Hapus isi folder, bukan folder-nya
-        find "$d" -maxdepth 1 -type f -delete 2>/dev/null
-    done
-}
-
-# ============================================================
-# PROTECT APP — ROOT: langsung, 1x command
+# PROTECT APP
 # ============================================================
 protect_app() {
     local pkg="$1"
@@ -169,7 +144,6 @@ protect_app() {
     local pid=$(pidof "$pkg" 2>/dev/null || pgrep -f "^$pkg" 2>/dev/null | head -1)
     [[ -z "$pid" ]] && return
 
-    # ROOT: semua dalam 1x write
     echo -1000 > /proc/$pid/oom_score_adj 2>/dev/null
     chrt -f -p 99 "$pid" 2>/dev/null
     cmd appops set "$pkg" RUN_IN_BACKGROUND allow 2>/dev/null
@@ -179,14 +153,9 @@ protect_app() {
 }
 
 # ============================================================
-# KILL UNWANTED APPS — ROOT: langsung, batch
+# KILL UNWANTED APPS — SEKALI PAS START
 # ============================================================
 kill_unwanted() {
-    local now=$(date +%s)
-    local last_kill=$(get "kill_unwanted_time")
-    [[ -n "$last_kill" && $((now - last_kill)) -lt $KILL_INTERVAL ]] && return
-
-    # Kumpulkan app yang mau di-kill
     local to_kill=()
     local pkg
     while IFS= read -r pkg; do
@@ -198,19 +167,16 @@ kill_unwanted() {
         [[ $allowed -eq 0 ]] && to_kill+=("$pkg")
     done < <(pm list packages -3 2>/dev/null)
 
-    # ROOT: kill dengan batch tiap 3 app + jeda
     local i=0
     for pkg in "${to_kill[@]}"; do
         am force-stop "$pkg" 2>/dev/null
         (( i++ ))
         [[ $((i % 3)) -eq 0 ]] && sleep 0.2
     done
-
-    set "kill_unwanted_time" "$now"
 }
 
 # ============================================================
-# CHECK CRASH — DOWNTIME TRACKING + SS SEKALI
+# CHECK CRASH
 # ============================================================
 check_crash() {
     local pkg="$1" name="$2"
@@ -241,7 +207,6 @@ check_crash() {
     local downtime=$((now - crash_time))
     local downtime_str=$(format_duration "$downtime")
 
-    # Kirim notif PERTAMA dengan screenshot
     if [[ -z "$ss_sent" ]]; then
         discord "💀 Crash Detected" "**$name** has crashed!\nPackage: \`$pkg\`\nDowntime: **$downtime_str**" 16711680 "$(ss)"
         set "crash_ss_$pkg" "1"
@@ -249,7 +214,6 @@ check_crash() {
         return 0
     fi
 
-    # Update downtime tiap UPDATE_INTERVAL
     if [[ -n "$last_update" && $((now - last_update)) -lt $UPDATE_INTERVAL ]]; then
         return 0
     fi
@@ -259,51 +223,12 @@ check_crash() {
 }
 
 # ============================================================
-# HEAVY TASKS — BACKGROUND + LOCK
-# ============================================================
-heavy_tasks() {
-    # Cek lock
-    if [[ -f "$HEAVY_LOCK" ]]; then
-        local lock_pid=$(cat "$HEAVY_LOCK" 2>/dev/null)
-        kill -0 "$lock_pid" 2>/dev/null && return 0
-        rm -f "$HEAVY_LOCK"
-    fi
-
-    # Jalanin di background
-    (
-        echo $$ > "$HEAVY_LOCK"
-        local now=$(date +%s)
-
-        # 1. Kill unwanted
-        kill_unwanted
-
-        # 2. Per package: cache + protect
-        for pkg in "${PACKAGES[@]}"; do
-            # Cache
-            local last_c=$(get "c_$pkg")
-            if [[ -z "$last_c" || $((now - last_c)) -ge $CACHE_INTERVAL ]]; then
-                clear_cache "$pkg"
-                set "c_$pkg" "$now"
-            fi
-
-            # Protect
-            protect_app "$pkg"
-
-            sleep 0.3
-        done
-
-        rm -f "$HEAVY_LOCK"
-    ) &
-}
-
-# ============================================================
 # CLEANUP
 # ============================================================
 cleanup() {
     init_packages
     for pkg in "${PACKAGES[@]}"; do am force-stop "$pkg" 2>/dev/null; done
     rm -f "$PID_FILE"
-    rm -f "$HEAVY_LOCK"
     rm -f "${TMP_DIR}"/rb_*.png 2>/dev/null
 }
 
@@ -318,49 +243,35 @@ if [[ "$1" == "daemon" ]]; then
 
     [[ ${#PACKAGES[@]} -eq 0 ]] && { discord "❌ Error" "No packages found." 16711680; exit 1; }
 
-    # Startup notification
     local startup_msg="🚀 **Daemon Started**\n"
     startup_msg+="📦 Packages: ${#PACKAGES[@]}\n"
     for pkg in "${PACKAGES[@]}"; do
         startup_msg+="• \`$pkg\`\n"
     done
     startup_msg+="\n⏱️ **Intervals:**\n"
-    startup_msg+="• ⚡ Crash check: ${CHECK_INTERVAL}s (FAST)\n"
-    startup_msg+="• 🔧 Heavy tasks: ${HEAVY_INTERVAL}s (SLOW)\n"
-    startup_msg+="• 📊 Downtime update: ${UPDATE_INTERVAL}s\n\n"
+    startup_msg+="• ⚡ Crash check: ${CHECK_INTERVAL}s\n"
+    startup_msg+="• 📊 Downtime update: ${UPDATE_INTERVAL}s\n"
+    startup_msg+="• 🔒 Protect: ${PROTECT_INTERVAL}s\n\n"
     startup_msg+="⚠️ **Auto-restart: DISABLED**\n"
     startup_msg+="Crash = notif + screenshot (1x) + downtime tracking."
     discord "🚀 RobloxBot Started" "$startup_msg" 3066993
 
-    # Fresh start
     for pkg in "${PACKAGES[@]}"; do
         am force-stop "$pkg" 2>/dev/null
     done
     sleep 2
 
-    # Launch sekali
     local i=0
     for pkg in "${PACKAGES[@]}"; do
         launch "$pkg" "${pkg##*.}"
         (( i++ )); (( i < ${#PACKAGES[@]} )) && sleep 30
     done
 
-    # LOOP UTAMA
-    local heavy_counter=0
-    local heavy_threshold=$(( HEAVY_INTERVAL / CHECK_INTERVAL ))
-
     while true; do
-        # 1. Cek crash — tiap 2 detik (RINGAN)
         for pkg in "${PACKAGES[@]}"; do
             check_crash "$pkg" "${pkg##*.}"
+            protect_app "$pkg"
         done
-
-        # 2. Heavy tasks — tiap 60 detik (BERAT, BACKGROUND)
-        ((heavy_counter++))
-        if [[ $heavy_counter -ge $heavy_threshold ]]; then
-            heavy_counter=0
-            heavy_tasks
-        fi
 
         sleep "$CHECK_INTERVAL"
     done
@@ -375,10 +286,14 @@ if [[ "$1" == "start" ]]; then
         discord "⚠️ Already Running" "Bot is already running.\nPID: $(cat $PID_FILE)" 16776960
         exit 1
     fi
+
+    init_packages
+    kill_unwanted
+
     nohup bash "$0" daemon >/dev/null 2>&1 &
     sleep 1
     if [[ -f "$PID_FILE" ]]; then
-        discord "✅ Started" "Bot daemon started.\nPID: $(cat $PID_FILE)\n\n⚡ Crash check: ${CHECK_INTERVAL}s\n🔧 Heavy tasks: ${HEAVY_INTERVAL}s\n📊 Downtime update: ${UPDATE_INTERVAL}s\n\n⚠️ Auto-restart: DISABLED" 3066993
+        discord "✅ Started" "Bot daemon started.\nPID: $(cat $PID_FILE)\n\n⚡ Crash check: ${CHECK_INTERVAL}s\n📊 Downtime update: ${UPDATE_INTERVAL}s\n🔒 Protect: ${PROTECT_INTERVAL}s\n\n⚠️ Auto-restart: DISABLED" 3066993
     else
         discord "❌ Failed" "Failed to start daemon." 16711680
     fi
@@ -434,8 +349,8 @@ if [[ "$1" == "status" ]]; then
 
     status_msg+="⏱️ **Intervals:**\n"
     status_msg+="• ⚡ Crash check: ${CHECK_INTERVAL}s\n"
-    status_msg+="• 🔧 Heavy tasks: ${HEAVY_INTERVAL}s\n"
-    status_msg+="• 📊 Downtime update: ${UPDATE_INTERVAL}s\n\n"
+    status_msg+="• 📊 Downtime update: ${UPDATE_INTERVAL}s\n"
+    status_msg+="• 🔒 Protect: ${PROTECT_INTERVAL}s\n\n"
 
     status_msg+="⚠️ **Auto-restart: DISABLED**\n\n"
 
@@ -458,7 +373,7 @@ fi
 # ============================================================
 if [[ "$1" == "test-webhook" ]]; then
     [[ -z "$DISCORD_WEBHOOK" ]] && { discord "❌ Error" "No webhook configured" 16711680; exit 1; }
-    discord "🧪 Test" "Webhook working! (Root Optimized + Auto-Root)" 3447003
+    discord "🧪 Test" "Webhook working! (Super Minimal)" 3447003
     exit 0
 fi
 
@@ -481,7 +396,6 @@ fi
 # ============================================================
 if [[ "$1" == "reset-state" ]]; then
     rm -f "$STATE_FILE"
-    rm -f "$HEAVY_LOCK"
     rm -f "${TMP_DIR}"/rb_*.png 2>/dev/null
     discord "🔄 Reset" "State DB and temp files reset successfully." 3447003
     exit 0
@@ -490,7 +404,7 @@ fi
 # ============================================================
 # HELP
 # ============================================================
-help_msg="🎮 **RobloxBot | ROOT OPTIMIZED + AUTO-ROOT**
+help_msg="🎮 **RobloxBot | SUPER MINIMAL**
 
 "
 help_msg+="**Usage:**\n"
@@ -501,15 +415,17 @@ help_msg+="\`./roblox_bot.sh status\` — Check status (Discord)\n"
 help_msg+="\`./roblox_bot.sh test-webhook\` — Test webhook\n"
 help_msg+="\`./roblox_bot.sh test-screenshot\` — Test screenshot\n"
 help_msg+="\`./roblox_bot.sh reset-state\` — Reset state DB\n\n"
-help_msg+="**⏱️ Intervals (cuma 3):**\n"
+help_msg+="**⏱️ Intervals:**\n"
 help_msg+="• Crash check: ${CHECK_INTERVAL}s\n"
-help_msg+="• Heavy tasks: ${HEAVY_INTERVAL}s\n"
-help_msg+="• Downtime update: ${UPDATE_INTERVAL}s\n\n"
+help_msg+="• Downtime update: ${UPDATE_INTERVAL}s\n"
+help_msg+="• Protect: ${PROTECT_INTERVAL}s\n\n"
 help_msg+="**🔒 Features:**\n"
 help_msg+="• Auto-restart: **DISABLED**\n"
 help_msg+="• Screenshot: **1x per crash**\n"
 help_msg+="• Downtime: tracked & updated\n"
-help_msg+="• Heavy tasks: background + lock\n"
+help_msg+="• Kill unwanted: **ONCE at start**\n"
+help_msg+="• No cache clear (Android handles it)\n"
+help_msg+="• No heavy lock (protect is fast)\n"
 help_msg+="• Root optimized: no su overhead\n"
 help_msg+="• Auto-root: runs as root automatically\n"
 help_msg+="• All output: Discord only"
