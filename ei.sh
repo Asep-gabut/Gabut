@@ -324,9 +324,9 @@ fi
 # RESTART
 # ============================================================
 if [[ "$1" == "restart" ]]; then
-    bash "$0" stop
+/data/data/com.termux/files/usr/bin/bash "$0" stop
     sleep 2
-    bash "$0" start
+/data/data/com.termux/files/usr/bin/bash "$0" stop
     exit 0
 fi
 
