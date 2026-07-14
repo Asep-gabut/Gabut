@@ -110,18 +110,18 @@ alive() {
     local pkg="$1"
     local pid
 
-    pid=$(su -c "pgrep -x '$pkg' 2>/dev/null" | head -1)
-    [[ -z "$pid" ]] && pid=$(su -c "pgrep -f '$pkg' 2>/dev/null" | head -1)
+    # 1. Cari PID
+    pid=$(su -c "pgrep -x '$pkg' 2>/dev/null || pgrep -f '$pkg' 2>/dev/null" | head -1)
     [[ -z "$pid" ]] && return 1
 
+    # 2. Cek /proc/$pid ada
     [[ -d "/proc/$pid" ]] || return 1
 
+    # 3. Cek bukan zombie
     local st=$(su -c "cat /proc/$pid/stat 2>/dev/null | awk '{print \$3}'" 2>/dev/null)
     [[ "$st" == "Z" ]] && return 1
 
-    su -c "dumpsys window windows 2>/dev/null | grep -q '$pkg'" 2>/dev/null && return 0
-    su -c "dumpsys activity activities 2>/dev/null | grep -m1 -E '$pkg.*(Resumed|Paused|Stopped)'" >/dev/null 2>&1 && return 0
-
+    # HIDUP
     return 0
 }
 
