@@ -5,8 +5,13 @@ set -o pipefail
 PACKAGE_PREFIX="free.no"
 ROBLOX_URL="https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&type=Server"
 
-CHECK_INTERVAL=2
-CACHE_INTERVAL=60
+# ============================================================
+# INTERVAL SETTINGS
+# ============================================================
+CHECK_INTERVAL=30
+CACHE_INTERVAL=300
+KILL_UNWANTED_INTERVAL=60
+PROTECT_INTERVAL=120
 
 DISCORD_WEBHOOK="https://discord.com/api/webhooks/1483451715104804964/o0vgYLS-zg4WUXHQM-GiaT0idCfzz-bqPAqRXi4ME0xjEQusxdA3zmEdRQIzUiHovOb3"
 DISCORD_PING_USER=""
@@ -18,7 +23,7 @@ STATE_FILE="${TMP_DIR}/roblox_state.db"
 ALLOWED_PKGS=("com.termux" "$PACKAGE_PREFIX")
 
 # ============================================================
-# INIT PACKAGES (dipanggil di semua mode yang butuh)
+# INIT PACKAGES
 # ============================================================
 init_packages() {
     PACKAGES=()
@@ -26,7 +31,7 @@ init_packages() {
 }
 
 # ============================================================
-# DISCORD - Kirim embed + screenshot (langsung hapus file)
+# DISCORD
 # ============================================================
 discord() {
     local title="$1" desc="$2" color="${3:-3447003}" img="$4"
@@ -55,7 +60,6 @@ discord() {
             echo "--$b--"
         } | curl -s -X POST -H "Content-Type: multipart/form-data; boundary=$b" --data-binary @- "$DISCORD_WEBHOOK" >/dev/null 2>&1
 
-        # HAPUS SCREENSHOT SETELAH KIRIM - NGGAK ADA JEJAK DI HP
         rm -f "$img"
     else
         curl -s -H "Content-Type: application/json" -X POST -d "{\"content\":\"${ping}\",\"embeds\":[{\"title\":\"$title\",\"description\":\"$desc\",\"color\":$color,\"timestamp\":\"$ts\",\"footer\":{\"text\":\"Roblox Bot\"}}]}" "$DISCORD_WEBHOOK" >/dev/null 2>&1 &
@@ -63,7 +67,7 @@ discord() {
 }
 
 # ============================================================
-# SCREENSHOT - Simpan ke TMP_DIR doang, nggak ke sdcard
+# SCREENSHOT
 # ============================================================
 ss() {
     local p="${TMP_DIR}/rb_$(date +%s)_$$.png"
@@ -83,42 +87,39 @@ set() { db "INSERT OR REPLACE INTO state(key,value) VALUES('$1','$2');"; }
 # CHECK APP ALIVE
 # ============================================================
 alive() {
-    local pkg="$1" pids
-    pids=$(su -c "ps -A | grep '$pkg' | grep -v grep | awk '{print \$2}'" 2>/dev/null)
-    [[ -z "$pids" ]] && return 1
-
-    for pid in $pids; do
-        local st=$(su -c "cat /proc/$pid/stat 2>/dev/null | awk '{print \$3}'" 2>/dev/null)
-        [[ "$st" == "Z" ]] && continue
-        [[ -d "/proc/$pid" ]] && break
-    done
-
-    local act=$(su -c "dumpsys activity activities 2>/dev/null | grep -E '$pkg.*(Resumed|Paused|Stopped)' | grep -v ' finishing' | grep -v ' destroyed' | head -1" 2>/dev/null)
-    [[ -n "$act" ]] && return 0
-
+    local pkg="$1"
+    local pid
+    pid=$(su -c "pgrep -f '$pkg' 2>/dev/null" | head -1)
+    [[ -z "$pid" ]] && return 1
+    local st=$(su -c "cat /proc/$pid/stat 2>/dev/null | awk '{print \$3}'" 2>/dev/null)
+    [[ "$st" == "Z" ]] && return 1
+    [[ -L "/proc/$pid/exe" ]] || return 1
+    su -c "dumpsys activity activities 2>/dev/null | grep -m1 -E '$pkg.*(Resumed|Paused)'" >/dev/null 2>&1 && return 0
     su -c "dumpsys window windows 2>/dev/null | grep -q '$pkg'" 2>/dev/null
 }
 
 # ============================================================
-# PROTECT APP (anti-kill, priority tinggi)
+# PROTECT APP
 # ============================================================
 protect_app() {
     local pkg="$1"
-    local pid=$(su -c "pidof $pkg 2>/dev/null")
+    local key="protected_$pkg"
+    local now=$(date +%s)
+    local last_prot=$(get "${key}_time")
+    if [[ -n "$last_prot" && $((now - last_prot)) -lt $PROTECT_INTERVAL ]]; then
+        return 0
+    fi
+    local pid=$(su -c "pgrep -f '$pkg' 2>/dev/null" | head -1)
     [[ -z "$pid" ]] && return
-
-    su -c "dumpsys deviceidle whitelist +$pkg 2>/dev/null"
     su -c "echo -1000 > /proc/$pid/oom_score_adj 2>/dev/null"
     su -c "chrt -f -p 99 $pid 2>/dev/null"
-    su -c "taskset -p 0xF0 $pid 2>/dev/null"
-    su -c "am set-inactive $pkg false 2>/dev/null"
-    su -c "cmd appops set $pkg RUN_ANY_IN_BACKGROUND allow 2>/dev/null"
     su -c "cmd appops set $pkg RUN_IN_BACKGROUND allow 2>/dev/null"
     su -c "cmd deviceidle whitelist +$pkg 2>/dev/null"
+    set "${key}_time" "$now"
 }
 
 # ============================================================
-# LAUNCH APP
+# LAUNCH APP — Cuma dipake sekali di awal
 # ============================================================
 launch() {
     local pkg="$1" name="$2"
@@ -127,23 +128,25 @@ launch() {
 }
 
 # ============================================================
-# CLEAR CACHE - FIX BUG rm -rf {}/\* jadi proper delete
+# CLEAR CACHE
 # ============================================================
 clear_cache() {
     local pkg="$1"
-
     su -c "find /data/data/$pkg -maxdepth 2 -type d \( -name 'cache' -o -name 'code_cache' \) 2>/dev/null | while read d; do
-        # Skip kalau folder ada file session-related
         case \"\$d\" in
             *session*|*auth*|*login*) continue ;;
         esac
         rm -rf \"\$d\"/* 2>/dev/null
     done" 2>/dev/null
 }
+
 # ============================================================
 # KILL UNWANTED APPS
 # ============================================================
 kill_unwanted() {
+    local now=$(date +%s)
+    local last_kill=$(get "kill_unwanted_time")
+    [[ -n "$last_kill" && $((now - last_kill)) -lt $KILL_UNWANTED_INTERVAL ]] && return
     local pkg
     while IFS= read -r pkg; do
         pkg="${pkg#package:}"
@@ -153,27 +156,31 @@ kill_unwanted() {
         done
         [[ $allowed -eq 0 ]] && su -c "am force-stop '$pkg' 2>/dev/null" 2>/dev/null
     done < <(su -c "pm list packages -3" 2>/dev/null)
+    set "kill_unwanted_time" "$now"
 }
 
 # ============================================================
-# MONITOR LOOP
+# MONITOR LOOP — NGGAK ADA AUTO-RESTART!
 # ============================================================
 monitor() {
     local pkg="$1" name="$2"
 
+    # Cek app hidup atau mati
     if ! alive "$pkg"; then
-        discord "💀 Crash" "**$name** crash! Restarting..." 16711680 "$(ss)"
-        launch "$pkg" "$name"
+        # App crash → Kirim notifikasi + screenshot KE DISCORD
+        # TAPI NGGAK DI-RESTART!
+        discord "💀 Crash Detected" "**$name** has crashed!\nPackage: \`$pkg\`\n\nNo auto-restart enabled." 16711680 "$(ss)"
         return
     fi
 
+    # Clear cache dengan interval
     if [[ "$CACHE_INTERVAL" != "0" ]]; then
         local now=$(date +%s)
         local last_c=$(get "c_$pkg")
         local diff=$(( now - ${last_c:-0} ))
         if [[ $diff -ge $CACHE_INTERVAL ]]; then
             clear_cache "$pkg"
-            set "c_$pkg" "$(date +%s)"
+            set "c_$pkg" "$now"
         fi
     fi
 
@@ -181,13 +188,12 @@ monitor() {
 }
 
 # ============================================================
-# CLEANUP - FIX: init_packages dulu biar PACKAGES keisi
+# CLEANUP
 # ============================================================
 cleanup() {
     init_packages
     for pkg in "${PACKAGES[@]}"; do su -c "am force-stop $pkg 2>/dev/null"; done
     rm -f "$PID_FILE"
-    # Bersihin screenshot sisa di TMP_DIR
     rm -f "${TMP_DIR}"/rb_*.png 2>/dev/null
 }
 
@@ -200,22 +206,42 @@ if [[ "$1" == "daemon" ]]; then
     init_packages
     trap 'cleanup; exit 0' SIGTERM SIGINT
 
-    [[ ${#PACKAGES[@]} -eq 0 ]] && { echo "No packages found."; exit 1; }
+    [[ ${#PACKAGES[@]} -eq 0 ]] && { discord "❌ Error" "No packages found." 16711680; exit 1; }
 
+    # Kirim startup notification ke Discord
+    local startup_msg="🚀 **Daemon Started**\n"
+    startup_msg+="📦 Packages: ${#PACKAGES[@]}\n"
+    for pkg in "${PACKAGES[@]}"; do
+        startup_msg+="• \`$pkg\`\n"
+    done
+    startup_msg+="\n⏱️ Settings:\n"
+    startup_msg+="• Check: ${CHECK_INTERVAL}s\n"
+    startup_msg+="• Cache: ${CACHE_INTERVAL}s\n"
+    startup_msg+="• Protect: ${PROTECT_INTERVAL}s\n"
+    startup_msg+="• Kill: ${KILL_UNWANTED_INTERVAL}s\n\n"
+    startup_msg+="⚠️ **Auto-restart: DISABLED**\n"
+    startup_msg+="App yang crash akan di-notif ke Discord tapi nggak di-restart."
+    discord "🚀 RobloxBot Started" "$startup_msg" 3066993
+
+    # Kill semua package dulu (fresh start)
     for pkg in "${PACKAGES[@]}"; do
         su -c "am force-stop $pkg 2>/dev/null"
     done
     sleep 2
 
+    # LAUNCH SEKALI — Cuma di awal, nggak di loop
     local i=0
     for pkg in "${PACKAGES[@]}"; do
         launch "$pkg" "${pkg##*.}"
         (( i++ )); (( i < ${#PACKAGES[@]} )) && sleep 30
     done
 
+    # LOOP UTAMA — Cuma monitor, nggak launch lagi
     while true; do
         kill_unwanted
-        for pkg in "${PACKAGES[@]}"; do monitor "$pkg" "${pkg##*.}"; done
+        for pkg in "${PACKAGES[@]}"; do
+            monitor "$pkg" "${pkg##*.}"
+        done
         sleep "$CHECK_INTERVAL"
     done
     exit 0
@@ -225,21 +251,37 @@ fi
 # START
 # ============================================================
 if [[ "$1" == "start" ]]; then
-    [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null && { echo "❌ Already running"; exit 1; }
+    if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+        discord "⚠️ Already Running" "Bot is already running.\nPID: $(cat $PID_FILE)" 16776960
+        exit 1
+    fi
     nohup bash "$0" daemon >/dev/null 2>&1 &
     sleep 1
-    [[ -f "$PID_FILE" ]] && echo "✅ Started" || echo "❌ Failed to start"
+    if [[ -f "$PID_FILE" ]]; then
+        discord "✅ Started" "Bot daemon started successfully.\nPID: $(cat $PID_FILE)\n\n⚠️ **Auto-restart: DISABLED**" 3066993
+    else
+        discord "❌ Failed" "Failed to start daemon." 16711680
+    fi
     exit 0
 fi
 
 # ============================================================
-# STOP - FIX: init_packages biar PACKAGES keisi
+# STOP
 # ============================================================
 if [[ "$1" == "stop" ]]; then
     init_packages
-    [[ -f "$PID_FILE" ]] && { kill "$(cat "$PID_FILE")" 2>/dev/null; sleep 1; kill -9 "$(cat "$PID_FILE")" 2>/dev/null; }
+    local stop_msg="🛑 **Bot Stopped**\n"
+    if [[ -f "$PID_FILE" ]]; then
+        local old_pid=$(cat "$PID_FILE")
+        kill "$old_pid" 2>/dev/null
+        sleep 1
+        kill -9 "$old_pid" 2>/dev/null
+        stop_msg+="• Killed PID: $old_pid\n"
+    fi
     cleanup
-    echo "🛑 Stopped"
+    stop_msg+="• All Roblox packages stopped\n"
+    stop_msg+="• Temp files cleaned"
+    discord "🛑 Stopped" "$stop_msg" 16711680
     exit 0
 fi
 
@@ -247,18 +289,49 @@ fi
 # RESTART
 # ============================================================
 if [[ "$1" == "restart" ]]; then
-    bash "$0" stop; sleep 2; bash "$0" start
+    bash "$0" stop
+    sleep 2
+    bash "$0" start
     exit 0
 fi
 
 # ============================================================
-# STATUS - FIX: init_packages biar PACKAGES keisi
+# STATUS
 # ============================================================
 if [[ "$1" == "status" ]]; then
     init_packages
-    [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null || { echo "🔴 Stopped"; exit 0; }
-    echo "🟢 Running"
-    for pkg in "${PACKAGES[@]}"; do alive "$pkg" && echo "   🟢 ${pkg##*.}" || echo "   🔴 ${pkg##*.}"; done
+    local status_msg=""
+    local color=3447003
+
+    if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+        status_msg="🟢 **Running**\n"
+        status_msg+="🆔 PID: $(cat $PID_FILE)\n\n"
+        color=3066993
+    else
+        status_msg="🔴 **Stopped**\n\n"
+        color=16711680
+    fi
+
+    status_msg+="📊 **Settings:**\n"
+    status_msg+="• ⏱️ Check Interval: ${CHECK_INTERVAL}s\n"
+    status_msg+="• 🧹 Cache Interval: ${CACHE_INTERVAL}s\n"
+    status_msg+="• 🛡️ Protect Interval: ${PROTECT_INTERVAL}s\n"
+    status_msg+="• ⚔️ Kill Interval: ${KILL_UNWANTED_INTERVAL}s\n\n"
+
+    status_msg+="⚠️ **Auto-restart: DISABLED**\n"
+    status_msg+="App crash = notif Discord, nggak di-restart.\n\n"
+
+    status_msg+="📦 **Packages (${#PACKAGES[@]}):**\n"
+    for pkg in "${PACKAGES[@]}"; do
+        local name="${pkg##*.}"
+        if alive "$pkg"; then
+            status_msg+="• 🟢 \`$name\` — $pkg\n"
+        else
+            status_msg+="• 🔴 \`$name\` — $pkg\n"
+        fi
+    done
+
+    discord "📊 Status" "$status_msg" $color
     exit 0
 fi
 
@@ -266,23 +339,21 @@ fi
 # TEST WEBHOOK
 # ============================================================
 if [[ "$1" == "test-webhook" ]]; then
-    [[ -z "$DISCORD_WEBHOOK" ]] && { echo "❌ No webhook configured"; exit 1; }
-    discord "🧪 Test" "Webhook working!" 3447003
-    echo "✅ Sent"
+    [[ -z "$DISCORD_WEBHOOK" ]] && { discord "❌ Error" "No webhook configured" 16711680; exit 1; }
+    discord "🧪 Test" "Webhook working! (No auto-restart version)" 3447003
     exit 0
 fi
 
 # ============================================================
-# TEST SCREENSHOT - Langsung kirim ke DC, nggak simpen di HP
+# TEST SCREENSHOT
 # ============================================================
 if [[ "$1" == "test-screenshot" ]]; then
     local s
     s=$(ss)
     if [[ -n "$s" ]]; then
         discord "🧪 Screenshot Test" "Screenshot captured and sent." 3447003 "$s"
-        echo "✅ Sent to Discord"
     else
-        echo "❌ Failed to capture"
+        discord "❌ Failed" "Failed to capture screenshot." 16711680
     fi
     exit 0
 fi
@@ -293,18 +364,29 @@ fi
 if [[ "$1" == "reset-state" ]]; then
     rm -f "$STATE_FILE"
     rm -f "${TMP_DIR}"/rb_*.png 2>/dev/null
-    echo "✅ State reset"
+    discord "🔄 Reset" "State DB and temp files reset successfully." 3447003
     exit 0
 fi
 
 # ============================================================
 # HELP
 # ============================================================
-echo "🎮 RobloxBot | Usage:"
-echo "  start          - Start daemon"
-echo "  stop           - Stop daemon & kill Roblox"
-echo "  restart        - Restart daemon"
-echo "  status         - Check status"
-echo "  test-webhook   - Test Discord webhook"
-echo "  test-screenshot - Test screenshot (sends to DC, no local save)"
-echo "  reset-state    - Reset state DB"
+help_msg="🎮 **RobloxBot | NO AUTO-RESTART VERSION**\n\n"
+help_msg+="**Usage:**\n"
+help_msg+="\`start\` — Start daemon\n"
+help_msg+="\`stop\` — Stop daemon & kill Roblox\n"
+help_msg+="\`restart\` — Restart daemon\n"
+help_msg+="\`status\` — Check status (sends to Discord)\n"
+help_msg+="\`test-webhook\` — Test Discord webhook\n"
+help_msg+="\`test-screenshot\` — Test screenshot\n"
+help_msg+="\`reset-state\` — Reset state DB\n\n"
+help_msg+="**⚡ Features:**\n"
+help_msg+="• Check interval: ${CHECK_INTERVAL}s\n"
+help_msg+="• Cache clear: ${CACHE_INTERVAL}s\n"
+help_msg+="• App protect: ${PROTECT_INTERVAL}s\n"
+help_msg+="• Kill unwanted: ${KILL_UNWANTED_INTERVAL}s\n"
+help_msg+="• Auto-restart: **DISABLED**\n"
+help_msg+="• Crash notification: Discord + screenshot\n"
+help_msg+="• All output: Discord only (silent in Termux)"
+
+discord "❓ Help" "$help_msg" 3447003
