@@ -60,22 +60,11 @@ end)
 
 task.spawn(function()
     while true do
-        local CoralGeode = getTool("Coral Geode")
         local Rod = getTool("Shady Rod")
-        
-        local ToolToEquip = nil
-        
-        if CoralGeode then
-            ToolToEquip = CoralGeode
-        elseif Rod then
-            ToolToEquip = Rod
-        end
-
-        if ToolToEquip then
             local xim = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
             if xim then
                 pcall(function()
-                    xim:EquipTool(ToolToEquip)
+                    xim:EquipTool(Rod)
                 end)
             end
         end
