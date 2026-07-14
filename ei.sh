@@ -6,12 +6,13 @@ PACKAGE_PREFIX="free.no"
 ROBLOX_URL="https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&type=Server"
 
 # ============================================================
-# INTERVAL SETTINGS
+# INTERVAL SETTINGS — DIPISAH!
 # ============================================================
-CHECK_INTERVAL=30
-CACHE_INTERVAL=300
-KILL_UNWANTED_INTERVAL=60
-PROTECT_INTERVAL=120
+CHECK_INTERVAL=2           # Cek crash tiap 2 detik (RINGAN)
+HEAVY_INTERVAL=30          # Heavy tasks tiap 30 detik (BERAT)
+CACHE_INTERVAL=300         # Clear cache tiap 5 menit
+PROTECT_INTERVAL=120       # Protect tiap 2 menit
+KILL_UNWANTED_INTERVAL=60  # Kill unwanted tiap 1 menit
 
 DISCORD_WEBHOOK="https://discord.com/api/webhooks/1483451715104804964/o0vgYLS-zg4WUXHQM-GiaT0idCfzz-bqPAqRXi4ME0xjEQusxdA3zmEdRQIzUiHovOb3"
 DISCORD_PING_USER=""
@@ -84,7 +85,7 @@ get() { db "SELECT value FROM state WHERE key='$1';" || echo ""; }
 set() { db "INSERT OR REPLACE INTO state(key,value) VALUES('$1','$2');"; }
 
 # ============================================================
-# CHECK APP ALIVE
+# CHECK APP ALIVE — RINGAN: cuma pgrep + dumpsys
 # ============================================================
 alive() {
     local pkg="$1"
@@ -99,7 +100,7 @@ alive() {
 }
 
 # ============================================================
-# PROTECT APP
+# PROTECT APP — BERAT: 4 command su
 # ============================================================
 protect_app() {
     local pkg="$1"
@@ -119,7 +120,7 @@ protect_app() {
 }
 
 # ============================================================
-# LAUNCH APP — Cuma dipake sekali di awal
+# LAUNCH APP — Cuma sekali di awal
 # ============================================================
 launch() {
     local pkg="$1" name="$2"
@@ -128,7 +129,7 @@ launch() {
 }
 
 # ============================================================
-# CLEAR CACHE
+# CLEAR CACHE — BERAT: find + rm
 # ============================================================
 clear_cache() {
     local pkg="$1"
@@ -141,7 +142,7 @@ clear_cache() {
 }
 
 # ============================================================
-# KILL UNWANTED APPS
+# KILL UNWANTED APPS — BERAT: pm list + force-stop
 # ============================================================
 kill_unwanted() {
     local now=$(date +%s)
@@ -160,31 +161,42 @@ kill_unwanted() {
 }
 
 # ============================================================
-# MONITOR LOOP — NGGAK ADA AUTO-RESTART!
+# CHECK CRASH — RINGAN: cuma alive() + discord()
 # ============================================================
-monitor() {
+check_crash() {
     local pkg="$1" name="$2"
-
-    # Cek app hidup atau mati
     if ! alive "$pkg"; then
-        # App crash → Kirim notifikasi + screenshot KE DISCORD
-        # TAPI NGGAK DI-RESTART!
         discord "💀 Crash Detected" "**$name** has crashed!\nPackage: \`$pkg\`\n\nNo auto-restart enabled." 16711680 "$(ss)"
-        return
     fi
+}
 
-    # Clear cache dengan interval
-    if [[ "$CACHE_INTERVAL" != "0" ]]; then
-        local now=$(date +%s)
-        local last_c=$(get "c_$pkg")
-        local diff=$(( now - ${last_c:-0} ))
-        if [[ $diff -ge $CACHE_INTERVAL ]]; then
-            clear_cache "$pkg"
-            set "c_$pkg" "$now"
+# ============================================================
+# HEAVY TASKS — BERAT: protect + cache + kill
+# ============================================================
+heavy_tasks() {
+    local pkg name
+
+    # Kill unwanted apps
+    kill_unwanted
+
+    # Per package: cache + protect
+    for pkg in "${PACKAGES[@]}"; do
+        name="${pkg##*.}"
+
+        # Clear cache dengan interval
+        if [[ "$CACHE_INTERVAL" != "0" ]]; then
+            local now=$(date +%s)
+            local last_c=$(get "c_$pkg")
+            local diff=$(( now - ${last_c:-0} ))
+            if [[ $diff -ge $CACHE_INTERVAL ]]; then
+                clear_cache "$pkg"
+                set "c_$pkg" "$now"
+            fi
         fi
-    fi
 
-    protect_app "$pkg"
+        # Protect app
+        protect_app "$pkg"
+    done
 }
 
 # ============================================================
@@ -198,7 +210,7 @@ cleanup() {
 }
 
 # ============================================================
-# DAEMON MODE
+# DAEMON MODE — LOOP DIPISAH!
 # ============================================================
 if [[ "$1" == "daemon" ]]; then
     echo $$ > "$PID_FILE"
@@ -208,19 +220,20 @@ if [[ "$1" == "daemon" ]]; then
 
     [[ ${#PACKAGES[@]} -eq 0 ]] && { discord "❌ Error" "No packages found." 16711680; exit 1; }
 
-    # Kirim startup notification ke Discord
+    # Kirim startup notification
     local startup_msg="🚀 **Daemon Started**\n"
     startup_msg+="📦 Packages: ${#PACKAGES[@]}\n"
     for pkg in "${PACKAGES[@]}"; do
         startup_msg+="• \`$pkg\`\n"
     done
-    startup_msg+="\n⏱️ Settings:\n"
-    startup_msg+="• Check: ${CHECK_INTERVAL}s\n"
-    startup_msg+="• Cache: ${CACHE_INTERVAL}s\n"
-    startup_msg+="• Protect: ${PROTECT_INTERVAL}s\n"
-    startup_msg+="• Kill: ${KILL_UNWANTED_INTERVAL}s\n\n"
+    startup_msg+="\n⏱️ **Intervals:**\n"
+    startup_msg+="• ⚡ Crash check: ${CHECK_INTERVAL}s (FAST)\n"
+    startup_msg+="• 🔧 Heavy tasks: ${HEAVY_INTERVAL}s (SLOW)\n"
+    startup_msg+="• 🧹 Cache clear: ${CACHE_INTERVAL}s\n"
+    startup_msg+="• 🛡️ Protect: ${PROTECT_INTERVAL}s\n"
+    startup_msg+="• ⚔️ Kill unwanted: ${KILL_UNWANTED_INTERVAL}s\n\n"
     startup_msg+="⚠️ **Auto-restart: DISABLED**\n"
-    startup_msg+="App yang crash akan di-notif ke Discord tapi nggak di-restart."
+    startup_msg+="Crash = notif Discord + screenshot only."
     discord "🚀 RobloxBot Started" "$startup_msg" 3066993
 
     # Kill semua package dulu (fresh start)
@@ -229,19 +242,32 @@ if [[ "$1" == "daemon" ]]; then
     done
     sleep 2
 
-    # LAUNCH SEKALI — Cuma di awal, nggak di loop
+    # LAUNCH SEKALI — Cuma di awal
     local i=0
     for pkg in "${PACKAGES[@]}"; do
         launch "$pkg" "${pkg##*.}"
         (( i++ )); (( i < ${#PACKAGES[@]} )) && sleep 30
     done
 
-    # LOOP UTAMA — Cuma monitor, nggak launch lagi
+    # ========================================================
+    # LOOP UTAMA — DIPISAH!
+    # ========================================================
+    local heavy_counter=0
+    local heavy_threshold=$(( HEAVY_INTERVAL / CHECK_INTERVAL ))  # 30/2 = 15
+
     while true; do
-        kill_unwanted
+        # 1. CEK CRASH — Tiap 2 detik (RINGAN)
         for pkg in "${PACKAGES[@]}"; do
-            monitor "$pkg" "${pkg##*.}"
+            check_crash "$pkg" "${pkg##*.}"
         done
+
+        # 2. HEAVY TASKS — Tiap 30 detik (BERAT)
+        ((heavy_counter++))
+        if [[ $heavy_counter -ge $heavy_threshold ]]; then
+            heavy_counter=0
+            heavy_tasks
+        fi
+
         sleep "$CHECK_INTERVAL"
     done
     exit 0
@@ -258,7 +284,7 @@ if [[ "$1" == "start" ]]; then
     nohup bash "$0" daemon >/dev/null 2>&1 &
     sleep 1
     if [[ -f "$PID_FILE" ]]; then
-        discord "✅ Started" "Bot daemon started successfully.\nPID: $(cat $PID_FILE)\n\n⚠️ **Auto-restart: DISABLED**" 3066993
+        discord "✅ Started" "Bot daemon started.\nPID: $(cat $PID_FILE)\n\n⚡ Crash check: ${CHECK_INTERVAL}s\n🔧 Heavy tasks: ${HEAVY_INTERVAL}s\n\n⚠️ Auto-restart: DISABLED" 3066993
     else
         discord "❌ Failed" "Failed to start daemon." 16711680
     fi
@@ -312,14 +338,14 @@ if [[ "$1" == "status" ]]; then
         color=16711680
     fi
 
-    status_msg+="📊 **Settings:**\n"
-    status_msg+="• ⏱️ Check Interval: ${CHECK_INTERVAL}s\n"
-    status_msg+="• 🧹 Cache Interval: ${CACHE_INTERVAL}s\n"
-    status_msg+="• 🛡️ Protect Interval: ${PROTECT_INTERVAL}s\n"
-    status_msg+="• ⚔️ Kill Interval: ${KILL_UNWANTED_INTERVAL}s\n\n"
+    status_msg+="⏱️ **Intervals:**\n"
+    status_msg+="• ⚡ Crash check: ${CHECK_INTERVAL}s\n"
+    status_msg+="• 🔧 Heavy tasks: ${HEAVY_INTERVAL}s\n"
+    status_msg+="• 🧹 Cache: ${CACHE_INTERVAL}s\n"
+    status_msg+="• 🛡️ Protect: ${PROTECT_INTERVAL}s\n"
+    status_msg+="• ⚔️ Kill: ${KILL_UNWANTED_INTERVAL}s\n\n"
 
-    status_msg+="⚠️ **Auto-restart: DISABLED**\n"
-    status_msg+="App crash = notif Discord, nggak di-restart.\n\n"
+    status_msg+="⚠️ **Auto-restart: DISABLED**\n\n"
 
     status_msg+="📦 **Packages (${#PACKAGES[@]}):**\n"
     for pkg in "${PACKAGES[@]}"; do
@@ -340,7 +366,7 @@ fi
 # ============================================================
 if [[ "$1" == "test-webhook" ]]; then
     [[ -z "$DISCORD_WEBHOOK" ]] && { discord "❌ Error" "No webhook configured" 16711680; exit 1; }
-    discord "🧪 Test" "Webhook working! (No auto-restart version)" 3447003
+    discord "🧪 Test" "Webhook working! (Separated intervals version)" 3447003
     exit 0
 fi
 
@@ -371,7 +397,7 @@ fi
 # ============================================================
 # HELP
 # ============================================================
-help_msg="🎮 **RobloxBot | NO AUTO-RESTART VERSION**\n\n"
+help_msg="🎮 **RobloxBot | SEPARATED INTERVALS**\n\n"
 help_msg+="**Usage:**\n"
 help_msg+="\`start\` — Start daemon\n"
 help_msg+="\`stop\` — Stop daemon & kill Roblox\n"
@@ -380,13 +406,15 @@ help_msg+="\`status\` — Check status (sends to Discord)\n"
 help_msg+="\`test-webhook\` — Test Discord webhook\n"
 help_msg+="\`test-screenshot\` — Test screenshot\n"
 help_msg+="\`reset-state\` — Reset state DB\n\n"
-help_msg+="**⚡ Features:**\n"
-help_msg+="• Check interval: ${CHECK_INTERVAL}s\n"
-help_msg+="• Cache clear: ${CACHE_INTERVAL}s\n"
-help_msg+="• App protect: ${PROTECT_INTERVAL}s\n"
-help_msg+="• Kill unwanted: ${KILL_UNWANTED_INTERVAL}s\n"
+help_msg+="**⚡ Intervals:**\n"
+help_msg+="• Crash check: ${CHECK_INTERVAL}s (FAST)\n"
+help_msg+="• Heavy tasks: ${HEAVY_INTERVAL}s (SLOW)\n"
+help_msg+="• Cache: ${CACHE_INTERVAL}s\n"
+help_msg+="• Protect: ${PROTECT_INTERVAL}s\n"
+help_msg+="• Kill unwanted: ${KILL_UNWANTED_INTERVAL}s\n\n"
+help_msg+="**🔒 Features:**\n"
 help_msg+="• Auto-restart: **DISABLED**\n"
-help_msg+="• Crash notification: Discord + screenshot\n"
-help_msg+="• All output: Discord only (silent in Termux)"
+help_msg+="• Crash notif: Discord + screenshot\n"
+help_msg+="• All output: Discord only"
 
 discord "❓ Help" "$help_msg" 3447003
