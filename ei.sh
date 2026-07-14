@@ -8,7 +8,7 @@ ROBLOX_URL="https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&t
 # ============================================================
 # INTERVAL SETTINGS — DIPISAH!
 # ============================================================
-CHECK_INTERVAL=2           # Cek crash tiap 2 detik (RINGAN)
+CHECK_INTERVAL=2           # Cek crash tiap 2 detik
 HEAVY_INTERVAL=30          # Heavy tasks tiap 30 detik (BERAT)
 CACHE_INTERVAL=300         # Clear cache tiap 5 menit
 PROTECT_INTERVAL=120       # Protect tiap 2 menit
