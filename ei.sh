@@ -4,7 +4,7 @@
 # AUTO-ROOT: Kalau belum root, re-execute dengan su
 # ============================================================
 if [[ $(id -u) -ne 0 ]]; then
-    exec su -c "bash '$0' '$@'"
+    exec su -c "/data/data/com.termux/files/usr/bin/bash '$0' '$@'"
 fi
 
 set -o pipefail
