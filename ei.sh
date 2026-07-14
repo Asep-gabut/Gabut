@@ -1,5 +1,12 @@
 #!/data/data/com.termux/files/usr/bin/bash
 
+# ============================================================
+# AUTO-ROOT: Kalau belum root, re-execute dengan su
+# ============================================================
+if [[ $(id -u) -ne 0 ]]; then
+    exec su -c "bash '$0' '$@'"
+fi
+
 set -o pipefail
 
 PACKAGE_PREFIX="free.no"
@@ -9,13 +16,13 @@ ROBLOX_URL="https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&t
 # INTERVAL SETTINGS — SIMPLE (cuma 3)
 # ============================================================
 CHECK_INTERVAL=2          # Cek crash tiap 2 detik (RINGAN)
-HEAVY_INTERVAL=60           # Heavy task tiap 1 menit (BERAT)
-UPDATE_INTERVAL=5          # Update downtime tiap 30 detik
+HEAVY_INTERVAL=60         # Heavy task tiap 1 menit (BERAT)
+UPDATE_INTERVAL=5        # Update downtime tiap 30 detik
 
-# Internal intervals (nggak perlu diubah, cuma timestamp-based)
-KILL_INTERVAL=120           # Kill unwanted tiap 2 menit (internal)
-CACHE_INTERVAL=600          # Clear cache tiap 10 menit (internal)
-PROTECT_INTERVAL=300        # Protect tiap 5 menit (internal)
+# Internal intervals (timestamp-based)
+KILL_INTERVAL=120         # Kill unwanted tiap 2 menit
+CACHE_INTERVAL=600        # Clear cache tiap 10 menit
+PROTECT_INTERVAL=300      # Protect tiap 5 menit
 
 DISCORD_WEBHOOK="https://discord.com/api/webhooks/1483451715104804964/o0vgYLS-zg4WUXHQM-GiaT0idCfzz-bqPAqRXi4ME0xjEQusxdA3zmEdRQIzUiHovOb3"
 DISCORD_PING_USER=""
@@ -32,7 +39,7 @@ ALLOWED_PKGS=("com.termux" "$PACKAGE_PREFIX")
 # ============================================================
 init_packages() {
     PACKAGES=()
-    while IFS= read -r pkg; do PACKAGES+=("$pkg"); done < <(su -c "pm list packages" 2>/dev/null | grep "^package:${PACKAGE_PREFIX}" 2>/dev/null | sed 's/package://')
+    while IFS= read -r pkg; do PACKAGES+=("$pkg"); done < <(pm list packages 2>/dev/null | grep "^package:${PACKAGE_PREFIX}" 2>/dev/null | sed 's/package://')
 }
 
 # ============================================================
@@ -72,18 +79,18 @@ discord() {
 }
 
 # ============================================================
-# SCREENSHOT
+# SCREENSHOT — ROOT: langsung
 # ============================================================
 ss() {
     local p="${TMP_DIR}/rb_$(date +%s)_$$.png"
-    su -c "screencap -p $p" 2>/dev/null
+    screencap -p "$p" 2>/dev/null
     [[ -f "$p" ]] && echo "$p" || echo ""
 }
 
 # ============================================================
-# SQLITE STATE DB
+# SQLITE STATE DB — ROOT: langsung
 # ============================================================
-db() { su -c "sqlite3 $STATE_FILE '$1' 2>/dev/null"; }
+db() { sqlite3 "$STATE_FILE" "$1" 2>/dev/null; }
 init_db() { [[ -f "$STATE_FILE" ]] || db "CREATE TABLE state(key TEXT PRIMARY KEY, value TEXT);"; }
 get() { db "SELECT value FROM state WHERE key='$1';" || echo ""; }
 set() { db "INSERT OR REPLACE INTO state(key,value) VALUES('$1','$2');"; }
@@ -104,79 +111,83 @@ format_duration() {
 }
 
 # ============================================================
-# CHECK APP ALIVE — ANTI FALSE DETECT
+# CHECK APP ALIVE — ROOT OPTIMIZED
 # ============================================================
 alive() {
     local pkg="$1"
     local pid
 
-    # 1. Cari PID
-    pid=$(su -c "pgrep -x '$pkg' 2>/dev/null || pgrep -f '$pkg' 2>/dev/null" | head -1)
+    # ROOT: pidof paling cepat untuk exact match
+    pid=$(pidof "$pkg" 2>/dev/null)
+    [[ -z "$pid" ]] && pid=$(pgrep -f "^$pkg" 2>/dev/null | head -1)
     [[ -z "$pid" ]] && return 1
 
-    # 2. Cek /proc/$pid ada
+    # ROOT: baca /proc langsung
     [[ -d "/proc/$pid" ]] || return 1
 
-    # 3. Cek bukan zombie
-    local st=$(su -c "cat /proc/$pid/stat 2>/dev/null | awk '{print \$3}'" 2>/dev/null)
+    # ROOT: baca stat langsung
+    local st=$(awk '{print $3}' /proc/$pid/stat 2>/dev/null)
     [[ "$st" == "Z" ]] && return 1
 
-    # HIDUP
+    # HIDUP — nggak perlu dumpsys (bikin false detect)
     return 0
 }
 
 # ============================================================
-# LAUNCH APP — Cuma sekali di awal
+# LAUNCH APP — ROOT: langsung
 # ============================================================
 launch() {
     local pkg="$1" name="$2"
     alive "$pkg" && return 0
-    su -c "am start -a android.intent.action.VIEW -d '$ROBLOX_URL' -p $pkg" >/dev/null 2>&1
+    am start -a android.intent.action.VIEW -d "$ROBLOX_URL" -p "$pkg" >/dev/null 2>&1
 }
 
 # ============================================================
-# CLEAR CACHE — GENTLE
+# CLEAR CACHE — ROOT: langsung, gentle
 # ============================================================
 clear_cache() {
     local pkg="$1"
-    su -c "nice -n 19 ionice -c 3 find /data/data/$pkg -maxdepth 2 -type d \( -name 'cache' -o -name 'code_cache' \) 2>/dev/null | while read d; do
-        case \"\$d\" in
+    # ROOT: langsung, nggak perlu su
+    find "/data/data/$pkg" -maxdepth 2 -type d \( -name 'cache' -o -name 'code_cache' \) 2>/dev/null | while read d; do
+        case "$d" in
             *session*|*auth*|*login*) continue ;;
         esac
-        rm -rf \"\$d\"/* 2>/dev/null
-        sleep 0.2
-    done" 2>/dev/null
+        # Hapus isi folder, bukan folder-nya
+        find "$d" -maxdepth 1 -type f -delete 2>/dev/null
+    done
 }
 
 # ============================================================
-# PROTECT APP — GENTLE (dengan jeda)
+# PROTECT APP — ROOT: langsung, 1x command
 # ============================================================
 protect_app() {
     local pkg="$1"
     local now=$(date +%s)
     local last_prot=$(get "protected_${pkg}_time")
-    if [[ -n "$last_prot" && $((now - last_prot)) -lt $PROTECT_INTERVAL ]]; then
-        return 0
-    fi
-    local pid=$(su -c "pgrep -f '$pkg' 2>/dev/null" | head -1)
+    [[ -n "$last_prot" && $((now - last_prot)) -lt $PROTECT_INTERVAL ]] && return 0
+
+    local pid=$(pidof "$pkg" 2>/dev/null || pgrep -f "^$pkg" 2>/dev/null | head -1)
     [[ -z "$pid" ]] && return
-    su -c "echo -1000 > /proc/$pid/oom_score_adj 2>/dev/null"
-    sleep 0.2
-    su -c "chrt -f -p 99 $pid 2>/dev/null"
-    sleep 0.2
-    su -c "cmd appops set $pkg RUN_IN_BACKGROUND allow 2>/dev/null"
-    sleep 0.2
-    su -c "cmd deviceidle whitelist +$pkg 2>/dev/null"
+
+    # ROOT: semua dalam 1x write
+    echo -1000 > /proc/$pid/oom_score_adj 2>/dev/null
+    chrt -f -p 99 "$pid" 2>/dev/null
+    cmd appops set "$pkg" RUN_IN_BACKGROUND allow 2>/dev/null
+    cmd deviceidle whitelist +"$pkg" 2>/dev/null
+
     set "protected_${pkg}_time" "$now"
 }
 
 # ============================================================
-# KILL UNWANTED APPS — GENTLE (dengan jeda)
+# KILL UNWANTED APPS — ROOT: langsung, batch
 # ============================================================
 kill_unwanted() {
     local now=$(date +%s)
     local last_kill=$(get "kill_unwanted_time")
     [[ -n "$last_kill" && $((now - last_kill)) -lt $KILL_INTERVAL ]] && return
+
+    # Kumpulkan app yang mau di-kill
+    local to_kill=()
     local pkg
     while IFS= read -r pkg; do
         pkg="${pkg#package:}"
@@ -184,11 +195,17 @@ kill_unwanted() {
         for a in "${ALLOWED_PKGS[@]}"; do
             [[ "$pkg" == "$a"* ]] && { allowed=1; break; }
         done
-        if [[ $allowed -eq 0 ]]; then
-            su -c "am force-stop '$pkg' 2>/dev/null" 2>/dev/null
-            sleep 0.3
-        fi
-    done < <(su -c "pm list packages -3" 2>/dev/null)
+        [[ $allowed -eq 0 ]] && to_kill+=("$pkg")
+    done < <(pm list packages -3 2>/dev/null)
+
+    # ROOT: kill dengan batch tiap 3 app + jeda
+    local i=0
+    for pkg in "${to_kill[@]}"; do
+        am force-stop "$pkg" 2>/dev/null
+        (( i++ ))
+        [[ $((i % 3)) -eq 0 ]] && sleep 0.2
+    done
+
     set "kill_unwanted_time" "$now"
 }
 
@@ -242,7 +259,7 @@ check_crash() {
 }
 
 # ============================================================
-# HEAVY TASKS — GENTLE + BACKGROUND + LOCK
+# HEAVY TASKS — BACKGROUND + LOCK
 # ============================================================
 heavy_tasks() {
     # Cek lock
@@ -252,7 +269,7 @@ heavy_tasks() {
         rm -f "$HEAVY_LOCK"
     fi
 
-    # Jalanin di background dengan LOW priority
+    # Jalanin di background
     (
         echo $$ > "$HEAVY_LOCK"
         local now=$(date +%s)
@@ -272,7 +289,7 @@ heavy_tasks() {
             # Protect
             protect_app "$pkg"
 
-            sleep 0.5
+            sleep 0.3
         done
 
         rm -f "$HEAVY_LOCK"
@@ -284,7 +301,7 @@ heavy_tasks() {
 # ============================================================
 cleanup() {
     init_packages
-    for pkg in "${PACKAGES[@]}"; do su -c "am force-stop $pkg 2>/dev/null"; done
+    for pkg in "${PACKAGES[@]}"; do am force-stop "$pkg" 2>/dev/null; done
     rm -f "$PID_FILE"
     rm -f "$HEAVY_LOCK"
     rm -f "${TMP_DIR}"/rb_*.png 2>/dev/null
@@ -308,8 +325,8 @@ if [[ "$1" == "daemon" ]]; then
         startup_msg+="• \`$pkg\`\n"
     done
     startup_msg+="\n⏱️ **Intervals:**\n"
-    startup_msg+="• ⚡ Crash check: ${CHECK_INTERVAL}s\n"
-    startup_msg+="• 🔧 Heavy tasks: ${HEAVY_INTERVAL}s\n"
+    startup_msg+="• ⚡ Crash check: ${CHECK_INTERVAL}s (FAST)\n"
+    startup_msg+="• 🔧 Heavy tasks: ${HEAVY_INTERVAL}s (SLOW)\n"
     startup_msg+="• 📊 Downtime update: ${UPDATE_INTERVAL}s\n\n"
     startup_msg+="⚠️ **Auto-restart: DISABLED**\n"
     startup_msg+="Crash = notif + screenshot (1x) + downtime tracking."
@@ -317,7 +334,7 @@ if [[ "$1" == "daemon" ]]; then
 
     # Fresh start
     for pkg in "${PACKAGES[@]}"; do
-        su -c "am force-stop $pkg 2>/dev/null"
+        am force-stop "$pkg" 2>/dev/null
     done
     sleep 2
 
@@ -333,12 +350,12 @@ if [[ "$1" == "daemon" ]]; then
     local heavy_threshold=$(( HEAVY_INTERVAL / CHECK_INTERVAL ))
 
     while true; do
-        # 1. Cek crash — tiap 2 detik
+        # 1. Cek crash — tiap 2 detik (RINGAN)
         for pkg in "${PACKAGES[@]}"; do
             check_crash "$pkg" "${pkg##*.}"
         done
 
-        # 2. Heavy tasks — tiap 60 detik
+        # 2. Heavy tasks — tiap 60 detik (BERAT, BACKGROUND)
         ((heavy_counter++))
         if [[ $heavy_counter -ge $heavy_threshold ]]; then
             heavy_counter=0
@@ -441,7 +458,7 @@ fi
 # ============================================================
 if [[ "$1" == "test-webhook" ]]; then
     [[ -z "$DISCORD_WEBHOOK" ]] && { discord "❌ Error" "No webhook configured" 16711680; exit 1; }
-    discord "🧪 Test" "Webhook working! (Simple + Gentle version)" 3447003
+    discord "🧪 Test" "Webhook working! (Root Optimized + Auto-Root)" 3447003
     exit 0
 fi
 
@@ -473,17 +490,17 @@ fi
 # ============================================================
 # HELP
 # ============================================================
-help_msg="🎮 **RobloxBot | SIMPLE + GENTLE**
+help_msg="🎮 **RobloxBot | ROOT OPTIMIZED + AUTO-ROOT**
 
 "
 help_msg+="**Usage:**\n"
-help_msg+="\`start\` — Start daemon\n"
-help_msg+="\`stop\` — Stop daemon & kill Roblox\n"
-help_msg+="\`restart\` — Restart daemon\n"
-help_msg+="\`status\` — Check status (sends to Discord)\n"
-help_msg+="\`test-webhook\` — Test Discord webhook\n"
-help_msg+="\`test-screenshot\` — Test screenshot\n"
-help_msg+="\`reset-state\` — Reset state DB\n\n"
+help_msg+="\`./roblox_bot.sh start\` — Start daemon (auto-root)\n"
+help_msg+="\`./roblox_bot.sh stop\` — Stop daemon\n"
+help_msg+="\`./roblox_bot.sh restart\` — Restart daemon\n"
+help_msg+="\`./roblox_bot.sh status\` — Check status (Discord)\n"
+help_msg+="\`./roblox_bot.sh test-webhook\` — Test webhook\n"
+help_msg+="\`./roblox_bot.sh test-screenshot\` — Test screenshot\n"
+help_msg+="\`./roblox_bot.sh reset-state\` — Reset state DB\n\n"
 help_msg+="**⏱️ Intervals (cuma 3):**\n"
 help_msg+="• Crash check: ${CHECK_INTERVAL}s\n"
 help_msg+="• Heavy tasks: ${HEAVY_INTERVAL}s\n"
@@ -492,7 +509,9 @@ help_msg+="**🔒 Features:**\n"
 help_msg+="• Auto-restart: **DISABLED**\n"
 help_msg+="• Screenshot: **1x per crash**\n"
 help_msg+="• Downtime: tracked & updated\n"
-help_msg+="• Heavy tasks: gentle (low priority + delays)\n"
+help_msg+="• Heavy tasks: background + lock\n"
+help_msg+="• Root optimized: no su overhead\n"
+help_msg+="• Auto-root: runs as root automatically\n"
 help_msg+="• All output: Discord only"
 
 discord "❓ Help" "$help_msg" 3447003
