@@ -67,8 +67,19 @@ task.spawn(function()
                     xim:EquipTool(Rod)
                 end)
             end
-        end
-        
         task.wait(20)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        local Bait = getTool("Coral Geode")
+            local bgs = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
+            if bgs then
+                pcall(function()
+                    xim:EquipTool(Bait)
+                end)
+            end
+        task.wait(1)
     end
 end)
