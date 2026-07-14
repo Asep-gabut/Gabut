@@ -77,7 +77,7 @@ task.spawn(function()
             local bgs = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
             if bgs then
                 pcall(function()
-                    xim:EquipTool(Bait)
+                    bgs:EquipTool(Bait)
                 end)
             end
         task.wait(1)
