@@ -9,7 +9,7 @@ ROBLOX_URL="https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&t
 # INTERVAL SETTINGS — SIMPLE (cuma 3)
 # ============================================================
 CHECK_INTERVAL=2          # Cek crash tiap 2 detik (RINGAN)
-HEAVY_INTERVAL=200           # Heavy task tiap 1 menit (BERAT)
+HEAVY_INTERVAL=60           # Heavy task tiap 1 menit (BERAT)
 UPDATE_INTERVAL=5          # Update downtime tiap 30 detik
 
 # Internal intervals (nggak perlu diubah, cuma timestamp-based)
