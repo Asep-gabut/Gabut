@@ -148,6 +148,8 @@ protect_app() {
 # ============================================================
 check_crash() {
     local pkg="$1" name="$2"
+    # Skip kalau bot lagi shutting down
+    [[ -f "${TMP_DIR}/rb_stopping" ]] && return 0
     local now=$(date +%s)
     local crash_time=$(get "crash_time_$pkg")
     local ss_sent=$(get "crash_ss_$pkg")
@@ -200,6 +202,7 @@ cleanup() {
     for pkg in "${PACKAGES[@]}"; do su -c "am force-stop $pkg 2>/dev/null"; done
     rm -f "$PID_FILE"
     rm -f "${TMP_DIR}"/rb_*.png 2>/dev/null
+    rm -f "${TMP_DIR}/rb_stopping" 2>/dev/null
 }
 
 # ============================================================
@@ -207,9 +210,10 @@ cleanup() {
 # ============================================================
 if [[ "$1" == "daemon" ]]; then
     echo $$ > "$PID_FILE"
+    rm -f "${TMP_DIR}/rb_stopping" 2>/dev/null
     init_db
     init_packages
-    trap 'cleanup; exit 0' SIGTERM SIGINT
+    trap 'touch "${TMP_DIR}/rb_stopping" 2>/dev/null; cleanup; exit 0' SIGTERM SIGINT
 
     [[ ${#PACKAGES[@]} -eq 0 ]] && { discord "❌ Error" "No packages found." 16711680; exit 1; }
 
@@ -281,6 +285,7 @@ fi
 # STOP
 # ============================================================
 if [[ "$1" == "stop" ]]; then
+    touch "${TMP_DIR}/rb_stopping" 2>/dev/null
     init_packages
     local stop_msg="🛑 **Bot Stopped**\n"
     if [[ -f "$PID_FILE" ]]; then
