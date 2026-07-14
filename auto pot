@@ -67,7 +67,7 @@ task.spawn(function()
                     xim:EquipTool(Rod)
                 end)
             end
-        task.wait(20)
+        task.wait(10)
     end
 end)
 
