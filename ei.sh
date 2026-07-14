@@ -6,7 +6,7 @@ PACKAGE_PREFIX="free.no"
 ROBLOX_URL="https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&type=Server"
 
 CHECK_INTERVAL=2
-CACHE_INTERVAL=2
+CACHE_INTERVAL=60
 
 DISCORD_WEBHOOK="https://discord.com/api/webhooks/1483451715104804964/o0vgYLS-zg4WUXHQM-GiaT0idCfzz-bqPAqRXi4ME0xjEQusxdA3zmEdRQIzUiHovOb3"
 DISCORD_PING_USER=""
@@ -139,9 +139,6 @@ clear_cache() {
         esac
         rm -rf \"\$d\"/* 2>/dev/null
     done" 2>/dev/null
-
-    # Drop kernel caches
-    su -c "echo 3 > /proc/sys/vm/drop_caches 2>/dev/null"
 }
 # ============================================================
 # KILL UNWANTED APPS
