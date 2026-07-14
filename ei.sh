@@ -6,13 +6,14 @@ PACKAGE_PREFIX="free.no"
 ROBLOX_URL="https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&type=Server"
 
 # ============================================================
-# INTERVAL SETTINGS — DIPISAH!
+# INTERVAL SETTINGS
 # ============================================================
-CHECK_INTERVAL=2           # Cek crash tiap 2 detik
+CHECK_INTERVAL=4           # Cek crash tiap 2 detik (RINGAN)
 HEAVY_INTERVAL=30          # Heavy tasks tiap 30 detik (BERAT)
 CACHE_INTERVAL=300         # Clear cache tiap 5 menit
 PROTECT_INTERVAL=120       # Protect tiap 2 menit
 KILL_UNWANTED_INTERVAL=60  # Kill unwanted tiap 1 menit
+DOWNTIME_UPDATE_INTERVAL=5 # Update downtime tiap 30 detik
 
 DISCORD_WEBHOOK="https://discord.com/api/webhooks/1483451715104804964/o0vgYLS-zg4WUXHQM-GiaT0idCfzz-bqPAqRXi4ME0xjEQusxdA3zmEdRQIzUiHovOb3"
 DISCORD_PING_USER=""
@@ -85,22 +86,53 @@ get() { db "SELECT value FROM state WHERE key='$1';" || echo ""; }
 set() { db "INSERT OR REPLACE INTO state(key,value) VALUES('$1','$2');"; }
 
 # ============================================================
-# CHECK APP ALIVE — RINGAN: cuma pgrep + dumpsys
+# FORMAT DURATION — Convert seconds to human readable
+# ============================================================
+format_duration() {
+    local seconds="$1"
+    local h=$((seconds / 3600))
+    local m=$(((seconds % 3600) / 60))
+    local s=$((seconds % 60))
+
+    local result=""
+    [[ $h -gt 0 ]] && result+="${h}h "
+    [[ $m -gt 0 ]] && result+="${m}m "
+    result+="${s}s"
+    echo "$result"
+}
+
+# ============================================================
+# CHECK APP ALIVE — ANTI FALSE DETECT
 # ============================================================
 alive() {
     local pkg="$1"
     local pid
-    pid=$(su -c "pgrep -f '$pkg' 2>/dev/null" | head -1)
+
+    # 1. Cari PID — coba exact match dulu, baru fallback ke full match
+    pid=$(su -c "pgrep -x '$pkg' 2>/dev/null" | head -1)
+    [[ -z "$pid" ]] && pid=$(su -c "pgrep -f '$pkg' 2>/dev/null" | head -1)
     [[ -z "$pid" ]] && return 1
+
+    # 2. Cek /proc/$pid masih ada (paling basic)
+    [[ -d "/proc/$pid" ]] || return 1
+
+    # 3. Cek zombie (kalau nggak bisa baca stat, skip — jangan anggap mati)
     local st=$(su -c "cat /proc/$pid/stat 2>/dev/null | awk '{print \$3}'" 2>/dev/null)
     [[ "$st" == "Z" ]] && return 1
-    [[ -L "/proc/$pid/exe" ]] || return 1
-    su -c "dumpsys activity activities 2>/dev/null | grep -m1 -E '$pkg.*(Resumed|Paused)'" >/dev/null 2>&1 && return 0
-    su -c "dumpsys window windows 2>/dev/null | grep -q '$pkg'" 2>/dev/null
+
+    # 4. Cek dengan dumpsys window (lebih reliable)
+    su -c "dumpsys window windows 2>/dev/null | grep -q '$pkg'" 2>/dev/null && return 0
+
+    # 5. Fallback: dumpsys activity
+    su -c "dumpsys activity activities 2>/dev/null | grep -m1 -E '$pkg.*(Resumed|Paused|Stopped)'" >/dev/null 2>&1 && return 0
+
+    # 6. PID ada tapi dumpsys nggak ketemu — app mungkin di background
+    # Anggap hidup aja (jangan false detect)
+    return 0
 }
 
 # ============================================================
-# PROTECT APP — BERAT: 4 command su
+# PROTECT APP
 # ============================================================
 protect_app() {
     local pkg="$1"
@@ -129,7 +161,7 @@ launch() {
 }
 
 # ============================================================
-# CLEAR CACHE — BERAT: find + rm
+# CLEAR CACHE
 # ============================================================
 clear_cache() {
     local pkg="$1"
@@ -142,7 +174,7 @@ clear_cache() {
 }
 
 # ============================================================
-# KILL UNWANTED APPS — BERAT: pm list + force-stop
+# KILL UNWANTED APPS
 # ============================================================
 kill_unwanted() {
     local now=$(date +%s)
@@ -161,17 +193,61 @@ kill_unwanted() {
 }
 
 # ============================================================
-# CHECK CRASH — RINGAN: cuma alive() + discord()
+# CHECK CRASH — DOWNTIME TRACKING + SS SEKALI
 # ============================================================
 check_crash() {
     local pkg="$1" name="$2"
-    if ! alive "$pkg"; then
-        discord "💀 Crash Detected" "**$name** has crashed!\nPackage: \`$pkg\`\n\nNo auto-restart enabled." 16711680 "$(ss)"
+    local now=$(date +%s)
+    local crash_time=$(get "crash_time_$pkg")       # Waktu crash pertama
+    local ss_sent=$(get "crash_ss_$pkg")             # SS udah dikirim?
+    local last_update=$(get "crash_update_$pkg")     # Last downtime update
+
+    # === APP HIDUP ===
+    if alive "$pkg"; then
+        # Kalau tadi crash, sekarang recovery
+        if [[ -n "$crash_time" ]]; then
+            local downtime=$((now - crash_time))
+            local downtime_str=$(format_duration "$downtime")
+            discord "✅ Recovered" "**$name** is back online!\nPackage: \`$pkg\`\nTotal downtime: **$downtime_str**" 3066993
+            # Reset semua flag
+            set "crash_time_$pkg" ""
+            set "crash_ss_$pkg" ""
+            set "crash_update_$pkg" ""
+        fi
+        return 0
     fi
+
+    # === APP MATI ===
+
+    # Catat waktu crash (kalau belum)
+    if [[ -z "$crash_time" ]]; then
+        set "crash_time_$pkg" "$now"
+        crash_time="$now"
+    fi
+
+    local downtime=$((now - crash_time))
+    local downtime_str=$(format_duration "$downtime")
+
+    # Kirim notif PERTAMA dengan screenshot
+    if [[ -z "$ss_sent" ]]; then
+        discord "💀 Crash Detected" "**$name** has crashed!\nPackage: \`$pkg\`\nDowntime: **$downtime_str**" 16711680 "$(ss)"
+        set "crash_ss_$pkg" "1"
+        set "crash_update_$pkg" "$now"
+        return 0
+    fi
+
+    # Update downtime tiap DOWNTIME_UPDATE_INTERVAL (30 detik)
+    if [[ -n "$last_update" && $((now - last_update)) -lt $DOWNTIME_UPDATE_INTERVAL ]]; then
+        return 0  # Skip, masih dalam interval update
+    fi
+
+    # Update embed dengan downtime terbaru
+    discord "💀 Still Down" "**$name** is still crashed.\nPackage: \`$pkg\`\nDowntime: **$downtime_str**" 16711680
+    set "crash_update_$pkg" "$now"
 }
 
 # ============================================================
-# HEAVY TASKS — BERAT: protect + cache + kill
+# HEAVY TASKS
 # ============================================================
 heavy_tasks() {
     local pkg name
@@ -210,7 +286,7 @@ cleanup() {
 }
 
 # ============================================================
-# DAEMON MODE — LOOP DIPISAH!
+# DAEMON MODE
 # ============================================================
 if [[ "$1" == "daemon" ]]; then
     echo $$ > "$PID_FILE"
@@ -231,9 +307,10 @@ if [[ "$1" == "daemon" ]]; then
     startup_msg+="• 🔧 Heavy tasks: ${HEAVY_INTERVAL}s (SLOW)\n"
     startup_msg+="• 🧹 Cache clear: ${CACHE_INTERVAL}s\n"
     startup_msg+="• 🛡️ Protect: ${PROTECT_INTERVAL}s\n"
-    startup_msg+="• ⚔️ Kill unwanted: ${KILL_UNWANTED_INTERVAL}s\n\n"
+    startup_msg+="• ⚔️ Kill unwanted: ${KILL_UNWANTED_INTERVAL}s\n"
+    startup_msg+="• 📊 Downtime update: ${DOWNTIME_UPDATE_INTERVAL}s\n\n"
     startup_msg+="⚠️ **Auto-restart: DISABLED**\n"
-    startup_msg+="Crash = notif Discord + screenshot only."
+    startup_msg+="Crash = notif + screenshot (1x) + downtime tracking."
     discord "🚀 RobloxBot Started" "$startup_msg" 3066993
 
     # Kill semua package dulu (fresh start)
@@ -250,10 +327,10 @@ if [[ "$1" == "daemon" ]]; then
     done
 
     # ========================================================
-    # LOOP UTAMA — DIPISAH!
+    # LOOP UTAMA — DIPISAH
     # ========================================================
     local heavy_counter=0
-    local heavy_threshold=$(( HEAVY_INTERVAL / CHECK_INTERVAL ))  # 30/2 = 15
+    local heavy_threshold=$(( HEAVY_INTERVAL / CHECK_INTERVAL ))
 
     while true; do
         # 1. CEK CRASH — Tiap 2 detik (RINGAN)
@@ -284,7 +361,7 @@ if [[ "$1" == "start" ]]; then
     nohup bash "$0" daemon >/dev/null 2>&1 &
     sleep 1
     if [[ -f "$PID_FILE" ]]; then
-        discord "✅ Started" "Bot daemon started.\nPID: $(cat $PID_FILE)\n\n⚡ Crash check: ${CHECK_INTERVAL}s\n🔧 Heavy tasks: ${HEAVY_INTERVAL}s\n\n⚠️ Auto-restart: DISABLED" 3066993
+        discord "✅ Started" "Bot daemon started.\nPID: $(cat $PID_FILE)\n\n⚡ Crash check: ${CHECK_INTERVAL}s\n🔧 Heavy tasks: ${HEAVY_INTERVAL}s\n📊 Downtime update: ${DOWNTIME_UPDATE_INTERVAL}s\n\n⚠️ Auto-restart: DISABLED" 3066993
     else
         discord "❌ Failed" "Failed to start daemon." 16711680
     fi
@@ -343,7 +420,8 @@ if [[ "$1" == "status" ]]; then
     status_msg+="• 🔧 Heavy tasks: ${HEAVY_INTERVAL}s\n"
     status_msg+="• 🧹 Cache: ${CACHE_INTERVAL}s\n"
     status_msg+="• 🛡️ Protect: ${PROTECT_INTERVAL}s\n"
-    status_msg+="• ⚔️ Kill: ${KILL_UNWANTED_INTERVAL}s\n\n"
+    status_msg+="• ⚔️ Kill: ${KILL_UNWANTED_INTERVAL}s\n"
+    status_msg+="• 📊 Downtime update: ${DOWNTIME_UPDATE_INTERVAL}s\n\n"
 
     status_msg+="⚠️ **Auto-restart: DISABLED**\n\n"
 
@@ -366,7 +444,7 @@ fi
 # ============================================================
 if [[ "$1" == "test-webhook" ]]; then
     [[ -z "$DISCORD_WEBHOOK" ]] && { discord "❌ Error" "No webhook configured" 16711680; exit 1; }
-    discord "🧪 Test" "Webhook working! (Separated intervals version)" 3447003
+    discord "🧪 Test" "Webhook working! (Downtime tracking version)" 3447003
     exit 0
 fi
 
@@ -397,7 +475,9 @@ fi
 # ============================================================
 # HELP
 # ============================================================
-help_msg="🎮 **RobloxBot | SEPARATED INTERVALS**\n\n"
+help_msg="🎮 **RobloxBot | DOWNTIME TRACKING**
+
+"
 help_msg+="**Usage:**\n"
 help_msg+="\`start\` — Start daemon\n"
 help_msg+="\`stop\` — Stop daemon & kill Roblox\n"
@@ -411,10 +491,13 @@ help_msg+="• Crash check: ${CHECK_INTERVAL}s (FAST)\n"
 help_msg+="• Heavy tasks: ${HEAVY_INTERVAL}s (SLOW)\n"
 help_msg+="• Cache: ${CACHE_INTERVAL}s\n"
 help_msg+="• Protect: ${PROTECT_INTERVAL}s\n"
-help_msg+="• Kill unwanted: ${KILL_UNWANTED_INTERVAL}s\n\n"
+help_msg+="• Kill unwanted: ${KILL_UNWANTED_INTERVAL}s\n"
+help_msg+="• Downtime update: ${DOWNTIME_UPDATE_INTERVAL}s\n\n"
 help_msg+="**🔒 Features:**\n"
 help_msg+="• Auto-restart: **DISABLED**\n"
-help_msg+="• Crash notif: Discord + screenshot\n"
+help_msg+="• Screenshot: **1x per crash**\n"
+help_msg+="• Downtime: tracked & updated\n"
+help_msg+="• Recovery: notif with total downtime\n"
 help_msg+="• All output: Discord only"
 
 discord "❓ Help" "$help_msg" 3447003
