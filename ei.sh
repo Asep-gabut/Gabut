@@ -8,9 +8,9 @@ ROBLOX_URL="https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&t
 # ============================================================
 # INTERVAL SETTINGS
 # ============================================================
-SCREENSHOT_INTERVAL=60     # Kirim SS tiap 60 detik (1 menit)
-LAUNCH_DELAY=35              # Delay antar launch (detik)
-PID_TIMEOUT=60               # Max tunggu PID (detik)
+SCREENSHOT_INTERVAL=60
+LAUNCH_DELAY=35
+PID_TIMEOUT=60
 
 DISCORD_WEBHOOK="https://discord.com/api/webhooks/1483451715104804964/o0vgYLS-zg4WUXHQM-GiaT0idCfzz-bqPAqRXi4ME0xjEQusxdA3zmEdRQIzUiHovOb3"
 DISCORD_PING_USER=""
@@ -18,17 +18,20 @@ DISCORD_PING_USER=""
 TMP_DIR="/data/data/com.termux/files/usr/tmp"
 PID_FILE="${TMP_DIR}/roblox_bot.pid"
 START_TIME_FILE="${TMP_DIR}/roblox_start_time"
+PID_CACHE="${TMP_DIR}/roblox_pids.cache"
 
 # ============================================================
 # INIT PACKAGES
 # ============================================================
 init_packages() {
     PACKAGES=()
-    while IFS= read -r pkg; do PACKAGES+=("$pkg"); done < <(su -c "pm list packages" 2>/dev/null | grep "^package:${PACKAGE_PREFIX}" 2>/dev/null | sed 's/package://')
+    while IFS= read -r pkg; do
+        [[ -n "$pkg" ]] && PACKAGES+=("$pkg")
+    done < <(su -c "pm list packages" 2>/dev/null | grep "^package:${PACKAGE_PREFIX}" 2>/dev/null | sed 's/package://')
 }
 
 # ============================================================
-# DISCORD — ORIGINAL PROVEN LOGIC
+# DISCORD
 # ============================================================
 discord() {
     local title="$1" desc="$2" color="${3:-3447003}" img="$4"
@@ -64,7 +67,7 @@ discord() {
 }
 
 # ============================================================
-# SCREENSHOT — ORIGINAL PROVEN LOGIC
+# SCREENSHOT
 # ============================================================
 ss() {
     local p="${TMP_DIR}/rb_$(date +%s)_$$.png"
@@ -73,7 +76,7 @@ ss() {
 }
 
 # ============================================================
-# FORMAT DURATION — ORIGINAL PROVEN LOGIC
+# FORMAT DURATION
 # ============================================================
 format_duration() {
     local seconds="$1"
@@ -88,21 +91,29 @@ format_duration() {
 }
 
 # ============================================================
-# GET UPTIME — Baca file, aman (cuma cat, nggak ada comparison)
+# GET UPTIME
 # ============================================================
 get_uptime() {
     local start=0
-    [[ -f "$START_TIME_FILE" ]] && start=$(cat "$START_TIME_FILE")
-    [[ -z "$start" ]] && start=0
+    [[ -f "$START_TIME_FILE" ]] && start=$(cat "$START_TIME_FILE" 2>/dev/null | tr -d '[:space:]')
+    [[ -z "$start" || ! "$start" =~ ^[0-9]+$ ]] && start=0
     local now=$(date +%s)
     local elapsed=$((now - start))
     format_duration "$elapsed"
 }
 
 # ============================================================
-# GET PID STATUS — Cek PID dengan retry
+# GET PID — Sekali, nggak retry (buat loop utama)
 # ============================================================
-get_pid_status() {
+get_pid_once() {
+    local pkg="$1"
+    su -c "pgrep -f '$pkg' 2>/dev/null" | head -1
+}
+
+# ============================================================
+# GET PID WITH RETRY — Buat protect pas startup
+# ============================================================
+get_pid_retry() {
     local pkg="$1"
     local pid=""
     local retries=0
@@ -112,25 +123,63 @@ get_pid_status() {
         [[ -z "$pid" ]] && sleep 1 && ((retries++))
     done
 
-    if [[ -n "$pid" ]]; then
-        echo "PID:$pid"
-    else
-        echo "TIMEOUT"
-    fi
+    echo "$pid"
 }
 
 # ============================================================
-# PROTECT APP — Sekali pas launch
+# BUILD PID CACHE — Simpan PID ke file (update tiap screenshot)
+# ============================================================
+build_pid_cache() {
+    > "$PID_CACHE"  # Kosongkan file
+    for pkg in "${PACKAGES[@]}"; do
+        local app_name="${pkg##*.}"
+        local pid=$(get_pid_once "$pkg")
+        if [[ -n "$pid" ]]; then
+            echo "${app_name}:${pid}:OK" >> "$PID_CACHE"
+        else
+            echo "${app_name}::TIMEOUT" >> "$PID_CACHE"
+        fi
+    done
+}
+
+# ============================================================
+# BUILD STATUS MESSAGE — Dari PID cache
+# ============================================================
+build_status_msg() {
+    local msg=""
+    msg="**⏰ Time:** \`$(date "+%H:%M:%S")\`\n"
+    msg+="**⏱️ Uptime:** \`$(get_uptime)\`\n\n"
+    msg+="📦 **Packages:**\n"
+
+    if [[ -f "$PID_CACHE" ]]; then
+        while IFS=: read -r app_name pid status; do
+            if [[ "$status" == "OK" && -n "$pid" ]]; then
+                msg+="• 🟢 \`${app_name}\` — PID: \`${pid}\`\n"
+            else
+                msg+="• 🔴 \`${app_name}\` — PID: **TIMEOUT**\n"
+            fi
+        done < "$PID_CACHE"
+    else
+        for pkg in "${PACKAGES[@]}"; do
+            local app_name="${pkg##*.}"
+            msg+="• ⚪ \`${app_name}\` — PID: **checking...**\n"
+        done
+    fi
+
+    echo "$msg"
+}
+
+# ============================================================
+# PROTECT APP — Retry PID, sekali pas startup
 # ============================================================
 protect_app() {
     local pkg="$1"
-    local status=$(get_pid_status "$pkg")
+    local pid=$(get_pid_retry "$pkg")
 
-    if [[ "$status" == "TIMEOUT" ]]; then
-        discord "⚠️ Warning" "Failed to get PID for \`$pkg\` after ${PID_TIMEOUT}s" 16776960
-    else
-        local pid="${status#PID:}"
+    if [[ -n "$pid" ]]; then
         su -c "echo -1000 > /proc/$pid/oom_score_adj 2>/dev/null"
+    else
+        discord "⚠️ Warning" "Failed to get PID for \`$pkg\` after ${PID_TIMEOUT}s" 16776960
     fi
 
     su -c "cmd appops set $pkg RUN_IN_BACKGROUND allow 2>/dev/null"
@@ -145,15 +194,17 @@ cleanup() {
     for pkg in "${PACKAGES[@]}"; do su -c "am force-stop $pkg 2>/dev/null"; done
     rm -f "$PID_FILE"
     rm -f "$START_TIME_FILE"
+    rm -f "$PID_CACHE"
     rm -f "${TMP_DIR}"/rb_*.png 2>/dev/null
 }
 
 # ============================================================
-# DAEMON MODE — ZERO timestamp comparison bugs
+# DAEMON MODE
 # ============================================================
 if [[ "$1" == "daemon" ]]; then
     echo $$ > "$PID_FILE"
     date +%s > "$START_TIME_FILE"
+    > "$PID_CACHE"
     init_packages
     trap 'cleanup; exit 0' SIGTERM SIGINT
 
@@ -170,7 +221,7 @@ if [[ "$1" == "daemon" ]]; then
     startup_msg+="🛡️ PID timeout: ${PID_TIMEOUT}s"
     discord "🚀 RobloxBot Started" "$startup_msg" 3066993
 
-    # Launch + protect dengan delay antar app
+    # Launch + protect
     local i=0
     for pkg in "${PACKAGES[@]}"; do
         su -c "am start -a android.intent.action.VIEW -d '$ROBLOX_URL' -p $pkg" >/dev/null 2>&1
@@ -179,28 +230,20 @@ if [[ "$1" == "daemon" ]]; then
         (( i < ${#PACKAGES[@]} )) && sleep "$LAUNCH_DELAY"
     done
 
-    # LOOP UTAMA — ZERO timestamp comparison, pure sleep
+    # Build PID cache pertama kali
+    build_pid_cache
+
+    # LOOP UTAMA — Cuma screenshot + sleep, PID dari cache
     while true; do
-        local time_str=$(date "+%H:%M:%S")
-        local uptime=$(get_uptime)
-        local ss_msg="**⏰ Time:** \`$time_str\`\n**⏱️ Uptime:** \`$uptime\`\n\n"
+        # Update PID cache (cepat, nggak blocking)
+        build_pid_cache
 
-        # Status package + PID
-        ss_msg+="📦 **Packages:**\n"
-        for pkg in "${PACKAGES[@]}"; do
-            local app_name="${pkg##*.}"
-            local pid_status=$(get_pid_status "$pkg")
-            if [[ "$pid_status" == "TIMEOUT" ]]; then
-                ss_msg+="• 🔴 \`$app_name\` — PID: **TIMEOUT**\n"
-            else
-                local pid="${pid_status#PID:}"
-                ss_msg+="• 🟢 \`$app_name\` — PID: \`$pid\`\n"
-            fi
-        done
+        # Build message dari cache (fresh tiap iterasi)
+        local msg="$(build_status_msg)"
 
-        ss_msg+="\n📸 Auto-capture every ${SCREENSHOT_INTERVAL}s"
+        # Kirim SS + status
+        discord "📸 Screenshot" "$msg" 3447003 "$(ss)"
 
-        discord "📸 Screenshot" "$ss_msg" 3447003 "$(ss)"
         sleep "$SCREENSHOT_INTERVAL"
     done
     exit 0
@@ -210,10 +253,12 @@ fi
 # START
 # ============================================================
 if [[ "$1" == "start" ]]; then
-    if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-        local uptime=$(get_uptime)
-        discord "⚠️ Already Running" "Bot is already running.\nPID: $(cat $PID_FILE)\n⏱️ Uptime: \`$uptime\`" 16776960
-        exit 1
+    if [[ -f "$PID_FILE" ]]; then
+        local old_pid=$(cat "$PID_FILE" 2>/dev/null)
+        if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+            discord "⚠️ Already Running" "Bot is already running.\nPID: $old_pid" 16776960
+            exit 1
+        fi
     fi
     nohup bash "$0" daemon >/dev/null 2>&1 &
     sleep 1
@@ -258,10 +303,13 @@ if [[ "$1" == "restart" ]]; then
 fi
 
 # ============================================================
-# STATUS — Gabung screenshot + PID status
+# STATUS
 # ============================================================
 if [[ "$1" == "status" ]]; then
     init_packages
+    > "$PID_CACHE"
+    build_pid_cache
+
     local status_msg=""
     local color=3447003
     local has_timeout=0
@@ -275,23 +323,15 @@ if [[ "$1" == "status" ]]; then
         color=16711680
     fi
 
-    status_msg+="📦 **Packages (${#PACKAGES[@]}):**\n"
-    for pkg in "${PACKAGES[@]}"; do
-        local app_name="${pkg##*.}"
-        local pid_status=$(get_pid_status "$pkg")
-
-        if [[ "$pid_status" == "TIMEOUT" ]]; then
-            status_msg+="• 🟡 \`$app_name\` — PID: **TIMEOUT** (not found after ${PID_TIMEOUT}s)\n"
-            has_timeout=1
-        else
-            local pid="${pid_status#PID:}"
-            status_msg+="• 🟢 \`$app_name\` — PID: \`$pid\`\n"
-        fi
-    done
-
+    status_msg+="$(build_status_msg)"
     status_msg+="\n📸 **Screenshot:** every ${SCREENSHOT_INTERVAL}s\n"
     status_msg+="⏳ **Launch delay:** ${LAUNCH_DELAY}s\n"
     status_msg+="🛡️ **PID timeout:** ${PID_TIMEOUT}s"
+
+    # Cek timeout
+    while IFS=: read -r _ _ status; do
+        [[ "$status" == "TIMEOUT" ]] && has_timeout=1
+    done < "$PID_CACHE"
 
     if [[ $has_timeout -eq 1 ]]; then
         color=16776960
@@ -306,7 +346,7 @@ fi
 # ============================================================
 if [[ "$1" == "test-webhook" ]]; then
     [[ -z "$DISCORD_WEBHOOK" ]] && { discord "❌ Error" "No webhook configured" 16711680; exit 1; }
-    discord "🧪 Test" "Webhook working! (SS with status + uptime)" 3447003
+    discord "🧪 Test" "Webhook working! (PID cache version)" 3447003
     exit 0
 fi
 
@@ -321,7 +361,7 @@ fi
 # ============================================================
 # HELP
 # ============================================================
-help_msg="🎮 **RobloxBot | SS + STATUS + UPTIME**\n\n"
+help_msg="🎮 **RobloxBot | PID CACHE + CLEAN LOOP**\n\n"
 help_msg+="**Usage:**\n"
 help_msg+="\`start\` — Start daemon\n"
 help_msg+="\`stop\` — Stop daemon & kill Roblox\n"
@@ -336,7 +376,7 @@ help_msg+="• 🛡️ PID timeout: ${PID_TIMEOUT}s\n\n"
 help_msg+="**🔒 Features:**\n"
 help_msg+="• Crash detection: **DISABLED**\n"
 help_msg+="• Screenshot: **auto every ${SCREENSHOT_INTERVAL}s**\n"
-help_msg+="• SS embed: **time + uptime + PID status**\n"
+help_msg+="• PID cache: **file-based, no variable accumulation**\n"
 help_msg+="• All output: Discord only"
 
 discord "❓ Help" "$help_msg" 3447003
