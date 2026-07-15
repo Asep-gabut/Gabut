@@ -102,23 +102,37 @@ get_uptime() {
 }
 
 # ============================================================
-# PROTECT APP — Sekali pas launch, retry PID max 60 detik
+# GET PID STATUS — Cek PID dengan retry (sama kayak protect)
 # ============================================================
-protect_app() {
+get_pid_status() {
     local pkg="$1"
-
-    # Retry sampai PID muncul, max PID_TIMEOUT detik
     local pid=""
     local retries=0
+
     while [[ -z "$pid" && $retries -lt $PID_TIMEOUT ]]; do
         pid=$(su -c "pgrep -f '$pkg' 2>/dev/null" | head -1)
         [[ -z "$pid" ]] && sleep 1 && ((retries++))
     done
 
     if [[ -n "$pid" ]]; then
-        su -c "echo -1000 > /proc/$pid/oom_score_adj 2>/dev/null"
+        echo "PID:$pid"
     else
+        echo "TIMEOUT"
+    fi
+}
+
+# ============================================================
+# PROTECT APP — Sekali pas launch, retry PID max PID_TIMEOUT
+# ============================================================
+protect_app() {
+    local pkg="$1"
+    local status=$(get_pid_status "$pkg")
+
+    if [[ "$status" == "TIMEOUT" ]]; then
         discord "⚠️ Warning" "Failed to get PID for \`$pkg\` after ${PID_TIMEOUT}s" 16776960
+    else
+        local pid="${status#PID:}"
+        su -c "echo -1000 > /proc/$pid/oom_score_adj 2>/dev/null"
     fi
 
     su -c "cmd appops set $pkg RUN_IN_BACKGROUND allow 2>/dev/null"
@@ -137,7 +151,7 @@ cleanup() {
 }
 
 # ============================================================
-# DAEMON MODE — Screenshot tiap menit, logic original
+# DAEMON MODE — Screenshot tiap menit + status
 # ============================================================
 if [[ "$1" == "daemon" ]]; then
     echo $$ > "$PID_FILE"
@@ -163,10 +177,7 @@ if [[ "$1" == "daemon" ]]; then
     local i=0
     for pkg in "${PACKAGES[@]}"; do
         su -c "am start -a android.intent.action.VIEW -d '$ROBLOX_URL' -p $pkg" >/dev/null 2>&1
-
-        # Protect: retry PID sampai muncul (max 60 detik)
         protect_app "$pkg"
-
         (( i++ ))
         (( i < ${#PACKAGES[@]} )) && sleep "$LAUNCH_DELAY"
     done
@@ -177,7 +188,7 @@ if [[ "$1" == "daemon" ]]; then
     while true; do
         local now=$(date +%s)
 
-        # Screenshot tiap 1 menit — PAKAI PATTERN ORIGINAL: "$(ss)"
+        # Screenshot tiap 1 menit
         if [[ $((now - last_screenshot)) -ge $SCREENSHOT_INTERVAL ]]; then
             local time_str=$(date "+%H:%M:%S")
             local uptime=$(get_uptime)
@@ -242,35 +253,51 @@ if [[ "$1" == "restart" ]]; then
 fi
 
 # ============================================================
-# STATUS
+# STATUS — Gabung screenshot + PID status jelas
 # ============================================================
 if [[ "$1" == "status" ]]; then
     init_packages
     local status_msg=""
     local color=3447003
     local uptime=$(get_uptime)
+    local has_timeout=0
 
     if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-        status_msg="🟢 **Running**\n"
-        status_msg+="🆔 PID: $(cat $PID_FILE)\n"
+        status_msg="🟢 **Bot Running**\n"
+        status_msg+="🆔 Bot PID: $(cat $PID_FILE)\n"
         status_msg+="⏱️ Uptime: \`$uptime\`\n\n"
         color=3066993
     else
-        status_msg="🔴 **Stopped**\n\n"
+        status_msg="🔴 **Bot Stopped**\n\n"
         color=16711680
     fi
 
-    status_msg+="📸 **Screenshot:** every ${SCREENSHOT_INTERVAL}s\n"
-    status_msg+="🔴 **Crash detect:** DISABLED\n"
-    status_msg+="⏳ **Launch delay:** ${LAUNCH_DELAY}s\n"
-    status_msg+="🛡️ **PID timeout:** ${PID_TIMEOUT}s\n\n"
-
     status_msg+="📦 **Packages (${#PACKAGES[@]}):**\n"
     for pkg in "${PACKAGES[@]}"; do
-        status_msg+="• \`${pkg##*.}\` — $pkg\n"
+        local app_name="${pkg##*.}"
+        local pid_status=$(get_pid_status "$pkg")
+
+        if [[ "$pid_status" == "TIMEOUT" ]]; then
+            status_msg+="• 🟡 \`$app_name\` — PID: **TIMEOUT** (not found after ${PID_TIMEOUT}s)\n"
+            has_timeout=1
+        else
+            local pid="${pid_status#PID:}"
+            status_msg+="• 🟢 \`$app_name\` — PID: \`$pid\`\n"
+        fi
     done
 
-    discord "📊 Status" "$status_msg" $color
+    status_msg+="\n📸 **Screenshot:** every ${SCREENSHOT_INTERVAL}s\n"
+    status_msg+="🔴 **Crash detect:** DISABLED\n"
+    status_msg+="⏳ **Launch delay:** ${LAUNCH_DELAY}s\n"
+    status_msg+="🛡️ **PID timeout:** ${PID_TIMEOUT}s"
+
+    # Kalau ada timeout, warn kuning
+    if [[ $has_timeout -eq 1 ]]; then
+        color=16776960
+    fi
+
+    # Kirim status + screenshot dalam satu embed
+    discord "📊 Status + Screenshot" "$status_msg" $color "$(ss)"
     exit 0
 fi
 
@@ -279,12 +306,12 @@ fi
 # ============================================================
 if [[ "$1" == "test-webhook" ]]; then
     [[ -z "$DISCORD_WEBHOOK" ]] && { discord "❌ Error" "No webhook configured" 16711680; exit 1; }
-    discord "🧪 Test" "Webhook working! (PID retry version)" 3447003
+    discord "🧪 Test" "Webhook working! (Status + Screenshot version)" 3447003
     exit 0
 fi
 
 # ============================================================
-# TEST SCREENSHOT — PAKAI PATTERN ORIGINAL
+# TEST SCREENSHOT
 # ============================================================
 if [[ "$1" == "test-screenshot" ]]; then
     discord "🧪 Screenshot Test" "Testing screenshot with proven logic." 3447003 "$(ss)"
@@ -294,12 +321,12 @@ fi
 # ============================================================
 # HELP
 # ============================================================
-help_msg="🎮 **RobloxBot | PID RETRY + PROVEN LOGIC**\n\n"
+help_msg="🎮 **RobloxBot | STATUS + SCREENSHOT**\n\n"
 help_msg+="**Usage:**\n"
 help_msg+="\`start\` — Start daemon\n"
 help_msg+="\`stop\` — Stop daemon & kill Roblox\n"
 help_msg+="\`restart\` — Restart daemon\n"
-help_msg+="\`status\` — Check status + uptime\n"
+help_msg+="\`status\` — Status + screenshot + PID info\n"
 help_msg+="\`test-webhook\` — Test Discord webhook\n"
 help_msg+="\`test-screenshot\` — Test screenshot\n\n"
 help_msg+="**⏱️ Intervals:**\n"
@@ -309,7 +336,7 @@ help_msg+="• 🛡️ PID timeout: ${PID_TIMEOUT}s\n\n"
 help_msg+="**🔒 Features:**\n"
 help_msg+="• Crash detection: **DISABLED**\n"
 help_msg+="• Screenshot: **auto every ${SCREENSHOT_INTERVAL}s**\n"
-help_msg+="• Uptime tracking: **enabled**\n"
+help_msg+="• Status: **includes screenshot + PID status**\n"
 help_msg+="• All output: Discord only"
 
 discord "❓ Help" "$help_msg" 3447003
