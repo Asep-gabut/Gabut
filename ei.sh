@@ -88,21 +88,19 @@ format_duration() {
 }
 
 # ============================================================
-# GET UPTIME
+# GET UPTIME — Baca file, aman (cuma cat, nggak ada comparison)
 # ============================================================
 get_uptime() {
-    if [[ -f "$START_TIME_FILE" ]]; then
-        local start=$(cat "$START_TIME_FILE")
-        local now=$(date +%s)
-        local elapsed=$((now - start))
-        format_duration "$elapsed"
-    else
-        echo "Unknown"
-    fi
+    local start=0
+    [[ -f "$START_TIME_FILE" ]] && start=$(cat "$START_TIME_FILE")
+    [[ -z "$start" ]] && start=0
+    local now=$(date +%s)
+    local elapsed=$((now - start))
+    format_duration "$elapsed"
 }
 
 # ============================================================
-# GET PID STATUS — Cek PID dengan retry (sama kayak protect)
+# GET PID STATUS — Cek PID dengan retry
 # ============================================================
 get_pid_status() {
     local pkg="$1"
@@ -122,7 +120,7 @@ get_pid_status() {
 }
 
 # ============================================================
-# PROTECT APP — Sekali pas launch, retry PID max PID_TIMEOUT
+# PROTECT APP — Sekali pas launch
 # ============================================================
 protect_app() {
     local pkg="$1"
@@ -151,7 +149,7 @@ cleanup() {
 }
 
 # ============================================================
-# DAEMON MODE — Screenshot tiap menit + status
+# DAEMON MODE — ZERO timestamp comparison bugs
 # ============================================================
 if [[ "$1" == "daemon" ]]; then
     echo $$ > "$PID_FILE"
@@ -167,7 +165,7 @@ if [[ "$1" == "daemon" ]]; then
     for pkg in "${PACKAGES[@]}"; do
         startup_msg+="• \`$pkg\`\n"
     done
-    startup_msg+="\n📸 **Screenshot delay ${SCREENSHOT_INTERVAL}s**\n"
+    startup_msg+="\n📸 **Screenshot every ${SCREENSHOT_INTERVAL}s**\n"
     startup_msg+="⏳ Launch delay: ${LAUNCH_DELAY}s between apps\n"
     startup_msg+="🛡️ PID timeout: ${PID_TIMEOUT}s"
     discord "🚀 RobloxBot Started" "$startup_msg" 3066993
@@ -181,21 +179,29 @@ if [[ "$1" == "daemon" ]]; then
         (( i < ${#PACKAGES[@]} )) && sleep "$LAUNCH_DELAY"
     done
 
-    local last_screenshot=0
-
-    # LOOP UTAMA — Cuma screenshot + sleep
+    # LOOP UTAMA — ZERO timestamp comparison, pure sleep
     while true; do
-        local now=$(date +%s)
+        local time_str=$(date "+%H:%M:%S")
+        local uptime=$(get_uptime)
+        local ss_msg="**⏰ Time:** \`$time_str\`\n**⏱️ Uptime:** \`$uptime\`\n\n"
 
-        # Screenshot tiap 1 menit
-        if [[ $((now - last_screenshot)) -ge $SCREENSHOT_INTERVAL ]]; then
-            local time_str=$(date "+%H:%M:%S")
-            local uptime=$(get_uptime)
-            discord "📸 Screenshot" "**Time:** \`$time_str\`\n**⏱️ Uptime:** \`$uptime\`\nAuto-capture every ${SCREENSHOT_INTERVAL}s" 3447003 "$(ss)"
-            last_screenshot=$now
-        fi
+        # Status package + PID
+        ss_msg+="📦 **Packages:**\n"
+        for pkg in "${PACKAGES[@]}"; do
+            local app_name="${pkg##*.}"
+            local pid_status=$(get_pid_status "$pkg")
+            if [[ "$pid_status" == "TIMEOUT" ]]; then
+                ss_msg+="• 🔴 \`$app_name\` — PID: **TIMEOUT**\n"
+            else
+                local pid="${pid_status#PID:}"
+                ss_msg+="• 🟢 \`$app_name\` — PID: \`$pid\`\n"
+            fi
+        done
 
-        sleep 5
+        ss_msg+="\n📸 Auto-capture every ${SCREENSHOT_INTERVAL}s"
+
+        discord "📸 Screenshot" "$ss_msg" 3447003 "$(ss)"
+        sleep "$SCREENSHOT_INTERVAL"
     done
     exit 0
 fi
@@ -252,19 +258,17 @@ if [[ "$1" == "restart" ]]; then
 fi
 
 # ============================================================
-# STATUS — Gabung screenshot + PID status jelas
+# STATUS — Gabung screenshot + PID status
 # ============================================================
 if [[ "$1" == "status" ]]; then
     init_packages
     local status_msg=""
     local color=3447003
-    local uptime=$(get_uptime)
     local has_timeout=0
 
     if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
         status_msg="🟢 **Bot Running**\n"
-        status_msg+="🆔 Bot PID: $(cat $PID_FILE)\n"
-        status_msg+="⏱️ Uptime: \`$uptime\`\n\n"
+        status_msg+="🆔 Bot PID: $(cat $PID_FILE)\n\n"
         color=3066993
     else
         status_msg="🔴 **Bot Stopped**\n\n"
@@ -285,16 +289,14 @@ if [[ "$1" == "status" ]]; then
         fi
     done
 
-    status_msg+="\n📸 **Screenshot:** delay ${SCREENSHOT_INTERVAL}s\n"
+    status_msg+="\n📸 **Screenshot:** every ${SCREENSHOT_INTERVAL}s\n"
     status_msg+="⏳ **Launch delay:** ${LAUNCH_DELAY}s\n"
     status_msg+="🛡️ **PID timeout:** ${PID_TIMEOUT}s"
 
-    # Kalau ada timeout, warn kuning
     if [[ $has_timeout -eq 1 ]]; then
         color=16776960
     fi
 
-    # Kirim status + screenshot dalam satu embed
     discord "📊 Status + Screenshot" "$status_msg" $color "$(ss)"
     exit 0
 fi
@@ -304,7 +306,7 @@ fi
 # ============================================================
 if [[ "$1" == "test-webhook" ]]; then
     [[ -z "$DISCORD_WEBHOOK" ]] && { discord "❌ Error" "No webhook configured" 16711680; exit 1; }
-    discord "🧪 Test" "Webhook working! (Status + Screenshot version)" 3447003
+    discord "🧪 Test" "Webhook working! (SS with status + uptime)" 3447003
     exit 0
 fi
 
@@ -319,7 +321,7 @@ fi
 # ============================================================
 # HELP
 # ============================================================
-help_msg="🎮 **RobloxBot | STATUS + SCREENSHOT**\n\n"
+help_msg="🎮 **RobloxBot | SS + STATUS + UPTIME**\n\n"
 help_msg+="**Usage:**\n"
 help_msg+="\`start\` — Start daemon\n"
 help_msg+="\`stop\` — Stop daemon & kill Roblox\n"
@@ -334,7 +336,7 @@ help_msg+="• 🛡️ PID timeout: ${PID_TIMEOUT}s\n\n"
 help_msg+="**🔒 Features:**\n"
 help_msg+="• Crash detection: **DISABLED**\n"
 help_msg+="• Screenshot: **auto every ${SCREENSHOT_INTERVAL}s**\n"
-help_msg+="• Status: **includes screenshot + PID status**\n"
+help_msg+="• SS embed: **time + uptime + PID status**\n"
 help_msg+="• All output: Discord only"
 
 discord "❓ Help" "$help_msg" 3447003
