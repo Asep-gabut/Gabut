@@ -6,7 +6,7 @@ PACKAGE_PREFIX="free.no"
 ROBLOX_URL="https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&type=Server"
 
 # ============================================================
-# INTERVAL SETTINGS — SIMPLE (cuma 3)
+# INTERVAL SETTINGS — SIMPLE (cua 3)
 # ============================================================
 CHECK_INTERVAL=2          # Cek crash tiap 2 detik (RINGAN)
 UPDATE_INTERVAL=5          # Update downtime tiap 30 detik
