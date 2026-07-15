@@ -105,16 +105,21 @@ alive() {
     local pkg="$1"
     local pid
 
-    pid=$(su -c "pgrep -x '$pkg' 2>/dev/null || pgrep -f '$pkg' 2>/dev/null" | head -1)
+    # Cari PID exact match
+    pid=$(su -c "pgrep -x '$pkg' 2>/dev/null" | head -1)
     [[ -z "$pid" ]] && return 1
 
+    # PID valid dan bukan zombie?
     [[ -d "/proc/$pid" ]] || return 1
-
     local st=$(su -c "cat /proc/$pid/stat 2>/dev/null | awk '{print \$3}'" 2>/dev/null)
     [[ "$st" == "Z" ]] && return 1
 
+    # Cek process masih di activity manager (anti false detect)
+    su -c "dumpsys activity processes 2>/dev/null | grep -q $pid" 2>/dev/null || return 1
+
     return 0
 }
+
 
 # ============================================================
 # LAUNCH APP — Cuma sekali di awal
@@ -212,6 +217,8 @@ if [[ "$1" == "daemon" ]]; then
     echo $$ > "$PID_FILE"
     rm -f "${TMP_DIR}/rb_stopping" 2>/dev/null
     init_db
+    # Reset crash state dari run sebelumnya
+    db "DELETE FROM state WHERE key LIKE 'crash_%';"
     init_packages
     trap 'touch "${TMP_DIR}/rb_stopping" 2>/dev/null; cleanup; exit 0' SIGTERM SIGINT
 
