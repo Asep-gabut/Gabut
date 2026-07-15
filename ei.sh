@@ -9,8 +9,8 @@ ROBLOX_URL="https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&t
 # INTERVAL SETTINGS
 # ============================================================
 SCREENSHOT_INTERVAL=60     # Kirim SS tiap 60 detik (1 menit)
-PROTECT_INTERVAL=300         # Protect app tiap 5 menit
 LAUNCH_DELAY=35              # Delay antar launch (detik)
+PID_TIMEOUT=60               # Max tunggu PID (detik)
 
 DISCORD_WEBHOOK="https://discord.com/api/webhooks/1483451715104804964/o0vgYLS-zg4WUXHQM-GiaT0idCfzz-bqPAqRXi4ME0xjEQusxdA3zmEdRQIzUiHovOb3"
 DISCORD_PING_USER=""
@@ -102,24 +102,27 @@ get_uptime() {
 }
 
 # ============================================================
-# PROTECT APP — ORIGINAL PROVEN LOGIC (tanpa sqlite)
+# PROTECT APP — Sekali pas launch, retry PID max 60 detik
 # ============================================================
 protect_app() {
     local pkg="$1"
-    local now=$(date +%s)
-    local last_prot_file="${TMP_DIR}/protected_${pkg}_time"
 
-    if [[ -f "$last_prot_file" ]]; then
-        local last_prot=$(cat "$last_prot_file")
-        [[ $((now - last_prot)) -lt $PROTECT_INTERVAL ]] && return 0
+    # Retry sampai PID muncul, max PID_TIMEOUT detik
+    local pid=""
+    local retries=0
+    while [[ -z "$pid" && $retries -lt $PID_TIMEOUT ]]; do
+        pid=$(su -c "pgrep -f '$pkg' 2>/dev/null" | head -1)
+        [[ -z "$pid" ]] && sleep 1 && ((retries++))
+    done
+
+    if [[ -n "$pid" ]]; then
+        su -c "echo -1000 > /proc/$pid/oom_score_adj 2>/dev/null"
+    else
+        discord "⚠️ Warning" "Failed to get PID for \`$pkg\` after ${PID_TIMEOUT}s" 16776960
     fi
 
-    local pid=$(su -c "pgrep -f '$pkg' 2>/dev/null" | head -1)
-    [[ -z "$pid" ]] && return
-    su -c "echo -1000 > /proc/$pid/oom_score_adj 2>/dev/null"
     su -c "cmd appops set $pkg RUN_IN_BACKGROUND allow 2>/dev/null"
     su -c "cmd deviceidle whitelist +$pkg 2>/dev/null"
-    echo "$now" > "$last_prot_file"
 }
 
 # ============================================================
@@ -131,7 +134,6 @@ cleanup() {
     rm -f "$PID_FILE"
     rm -f "$START_TIME_FILE"
     rm -f "${TMP_DIR}"/rb_*.png 2>/dev/null
-    rm -f "${TMP_DIR}"/protected_*_time 2>/dev/null
 }
 
 # ============================================================
@@ -153,38 +155,32 @@ if [[ "$1" == "daemon" ]]; then
     done
     startup_msg+="\n📸 **Screenshot every ${SCREENSHOT_INTERVAL}s**\n"
     startup_msg+="🔴 Crash detection: **DISABLED**\n"
-    startup_msg+="🛡️ OOM protect: every ${PROTECT_INTERVAL}s\n"
-    startup_msg+="⏳ Launch delay: ${LAUNCH_DELAY}s between apps"
+    startup_msg+="⏳ Launch delay: ${LAUNCH_DELAY}s between apps\n"
+    startup_msg+="🛡️ PID timeout: ${PID_TIMEOUT}s"
     discord "🚀 RobloxBot Started" "$startup_msg" 3066993
 
-    # Launch dengan delay antar app
+    # Launch + protect dengan delay antar app
     local i=0
     for pkg in "${PACKAGES[@]}"; do
         su -c "am start -a android.intent.action.VIEW -d '$ROBLOX_URL' -p $pkg" >/dev/null 2>&1
+
+        # Protect: retry PID sampai muncul (max 60 detik)
+        protect_app "$pkg"
+
         (( i++ ))
         (( i < ${#PACKAGES[@]} )) && sleep "$LAUNCH_DELAY"
     done
 
-    local last_protect=0
     local last_screenshot=0
 
-    # LOOP UTAMA
+    # LOOP UTAMA — Cuma screenshot + sleep
     while true; do
         local now=$(date +%s)
 
-        # 1. Protect app tiap 5 menit
-        if [[ $((now - last_protect)) -ge $PROTECT_INTERVAL ]]; then
-            for pkg in "${PACKAGES[@]}"; do
-                protect_app "$pkg"
-            done
-            last_protect=$now
-        fi
-
-        # 2. Screenshot tiap 1 menit — PAKAI PATTERN ORIGINAL: "$(ss)"
+        # Screenshot tiap 1 menit — PAKAI PATTERN ORIGINAL: "$(ss)"
         if [[ $((now - last_screenshot)) -ge $SCREENSHOT_INTERVAL ]]; then
             local time_str=$(date "+%H:%M:%S")
             local uptime=$(get_uptime)
-            # PATTERN ORIGINAL: discord "title" "desc" color "$(ss)"
             discord "📸 Screenshot" "**Time:** \`$time_str\`\n**⏱️ Uptime:** \`$uptime\`\nAuto-capture every ${SCREENSHOT_INTERVAL}s" 3447003 "$(ss)"
             last_screenshot=$now
         fi
@@ -266,8 +262,8 @@ if [[ "$1" == "status" ]]; then
 
     status_msg+="📸 **Screenshot:** every ${SCREENSHOT_INTERVAL}s\n"
     status_msg+="🔴 **Crash detect:** DISABLED\n"
-    status_msg+="🛡️ **OOM protect:** every ${PROTECT_INTERVAL}s\n"
-    status_msg+="⏳ **Launch delay:** ${LAUNCH_DELAY}s\n\n"
+    status_msg+="⏳ **Launch delay:** ${LAUNCH_DELAY}s\n"
+    status_msg+="🛡️ **PID timeout:** ${PID_TIMEOUT}s\n\n"
 
     status_msg+="📦 **Packages (${#PACKAGES[@]}):**\n"
     for pkg in "${PACKAGES[@]}"; do
@@ -283,7 +279,7 @@ fi
 # ============================================================
 if [[ "$1" == "test-webhook" ]]; then
     [[ -z "$DISCORD_WEBHOOK" ]] && { discord "❌ Error" "No webhook configured" 16711680; exit 1; }
-    discord "🧪 Test" "Webhook working! (Proven logic version)" 3447003
+    discord "🧪 Test" "Webhook working! (PID retry version)" 3447003
     exit 0
 fi
 
@@ -291,7 +287,6 @@ fi
 # TEST SCREENSHOT — PAKAI PATTERN ORIGINAL
 # ============================================================
 if [[ "$1" == "test-screenshot" ]]; then
-    # PATTERN ORIGINAL: discord "title" "desc" color "$(ss)"
     discord "🧪 Screenshot Test" "Testing screenshot with proven logic." 3447003 "$(ss)"
     exit 0
 fi
@@ -299,7 +294,7 @@ fi
 # ============================================================
 # HELP
 # ============================================================
-help_msg="🎮 **RobloxBot | PROVEN LOGIC**\n\n"
+help_msg="🎮 **RobloxBot | PID RETRY + PROVEN LOGIC**\n\n"
 help_msg+="**Usage:**\n"
 help_msg+="\`start\` — Start daemon\n"
 help_msg+="\`stop\` — Stop daemon & kill Roblox\n"
@@ -309,8 +304,8 @@ help_msg+="\`test-webhook\` — Test Discord webhook\n"
 help_msg+="\`test-screenshot\` — Test screenshot\n\n"
 help_msg+="**⏱️ Intervals:**\n"
 help_msg+="• 📸 Screenshot: every ${SCREENSHOT_INTERVAL}s\n"
-help_msg+="• 🛡️ OOM protect: every ${PROTECT_INTERVAL}s\n"
-help_msg+="• ⏳ Launch delay: ${LAUNCH_DELAY}s between apps\n\n"
+help_msg+="• ⏳ Launch delay: ${LAUNCH_DELAY}s between apps\n"
+help_msg+="• 🛡️ PID timeout: ${PID_TIMEOUT}s\n\n"
 help_msg+="**🔒 Features:**\n"
 help_msg+="• Crash detection: **DISABLED**\n"
 help_msg+="• Screenshot: **auto every ${SCREENSHOT_INTERVAL}s**\n"
