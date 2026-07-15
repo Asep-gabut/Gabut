@@ -6,21 +6,17 @@ PACKAGE_PREFIX="free.no"
 ROBLOX_URL="https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&type=Server"
 
 # ============================================================
-# INTERVAL SETTINGS — SIMPLE (cua 3)
+# INTERVAL SETTINGS
 # ============================================================
-CHECK_INTERVAL=2          # Cek crash tiap 2 detik (RINGAN)
-UPDATE_INTERVAL=30         # Update downtime tiap 30 detik (diubah dari 5 -> 30)
-
-# Internal intervals (nggak perlu diubah, cuma timestamp-based)
-PROTECT_INTERVAL=300        # Protect tiap 5 menit (internal)
+SCREENSHOT_INTERVAL=60     # Kirim SS tiap 60 detik (1 menit)
+PROTECT_INTERVAL=300         # Protect app tiap 5 menit
 
 DISCORD_WEBHOOK="https://discord.com/api/webhooks/1483451715104804964/o0vgYLS-zg4WUXHQM-GiaT0idCfzz-bqPAqRXi4ME0xjEQusxdA3zmEdRQIzUiHovOb3"
 DISCORD_PING_USER=""
 
 TMP_DIR="/data/data/com.termux/files/usr/tmp"
 PID_FILE="${TMP_DIR}/roblox_bot.pid"
-STATE_FILE="${TMP_DIR}/roblox_state.db"
-
+START_TIME_FILE="${TMP_DIR}/roblox_start_time"
 
 # ============================================================
 # INIT PACKAGES
@@ -76,22 +72,16 @@ ss() {
 }
 
 # ============================================================
-# SQLITE STATE DB
-# ============================================================
-db() { su -c "sqlite3 $STATE_FILE '$1' 2>/dev/null"; }
-init_db() { [[ -f "$STATE_FILE" ]] || db "CREATE TABLE state(key TEXT PRIMARY KEY, value TEXT);"; }
-get() { db "SELECT value FROM state WHERE key='$1';" || echo ""; }
-set() { db "INSERT OR REPLACE INTO state(key,value) VALUES('$1','$2');"; }
-
-# ============================================================
 # FORMAT DURATION
 # ============================================================
 format_duration() {
     local seconds="$1"
-    local h=$((seconds / 3600))
+    local d=$((seconds / 86400))
+    local h=$(((seconds % 86400) / 3600))
     local m=$(((seconds % 3600) / 60))
     local s=$((seconds % 60))
     local result=""
+    [[ $d -gt 0 ]] && result+="${d}d "
     [[ $h -gt 0 ]] && result+="${h}h "
     [[ $m -gt 0 ]] && result+="${m}m "
     result+="${s}s"
@@ -99,110 +89,38 @@ format_duration() {
 }
 
 # ============================================================
-# CHECK APP ALIVE — FIXED ANTI FALSE DETECT
+# GET UPTIME
 # ============================================================
-alive() {
-    local pkg="$1" pids
-
-    # METHOD 1: Cek process via ps
-    pids=$(su -c "ps -A | grep '$pkg' | grep -v grep | awk '{print \$2}'" 2>/dev/null)
-    if [[ -n "$pids" ]]; then
-        for pid in $pids; do
-            local st=$(su -c "cat /proc/$pid/stat 2>/dev/null | awk '{print \$3}'" 2>/dev/null)
-            [[ "$st" == "Z" ]] && continue
-            [[ -d "/proc/$pid" ]] || continue
-            # PID valid dan hidup, lanjut cek activity
-            break
-        done
+get_uptime() {
+    if [[ -f "$START_TIME_FILE" ]]; then
+        local start=$(cat "$START_TIME_FILE")
+        local now=$(date +%s)
+        local elapsed=$((now - start))
+        format_duration "$elapsed"
+    else
+        echo "Unknown"
     fi
-
-    # METHOD 2: Cek activity state (Resumed/Paused/Stopped = hidup)
-    local act=$(su -c "dumpsys activity activities 2>/dev/null | grep -E '$pkg.*(Resumed|Paused|Stopped)' | grep -v ' finishing' | grep -v ' destroyed' | head -1" 2>/dev/null)
-    [[ -n "$act" ]] && return 0
-
-    # METHOD 3: Cek window (fallback)
-    su -c "dumpsys window windows 2>/dev/null | grep -q '$pkg'" 2>/dev/null && return 0
-
-    return 1
-}
-
-
-# ============================================================
-# LAUNCH APP — Cuma sekali di awal
-# ============================================================
-launch() {
-    local pkg="$1" name="$2"
-    alive "$pkg" && return 0
-    su -c "am start -a android.intent.action.VIEW -d '$ROBLOX_URL' -p $pkg" >/dev/null 2>&1
 }
 
 # ============================================================
-# PROTECT APP — GENTLE (dengan jeda)
+# PROTECT APP — Ringan, cuma tiap 5 menit
 # ============================================================
 protect_app() {
     local pkg="$1"
     local now=$(date +%s)
-    local last_prot=$(get "protected_${pkg}_time")
-    if [[ -n "$last_prot" && $((now - last_prot)) -lt $PROTECT_INTERVAL ]]; then
-        return 0
+    local last_prot_file="${TMP_DIR}/protected_${pkg}_time"
+
+    if [[ -f "$last_prot_file" ]]; then
+        local last_prot=$(cat "$last_prot_file")
+        [[ $((now - last_prot)) -lt $PROTECT_INTERVAL ]] && return 0
     fi
+
     local pid=$(su -c "pgrep -f '$pkg' 2>/dev/null" | head -1)
     [[ -z "$pid" ]] && return
     su -c "echo -1000 > /proc/$pid/oom_score_adj 2>/dev/null"
     su -c "cmd appops set $pkg RUN_IN_BACKGROUND allow 2>/dev/null"
     su -c "cmd deviceidle whitelist +$pkg 2>/dev/null"
-    set "protected_${pkg}_time" "$now"
-}
-
-# ============================================================
-# CHECK CRASH — DOWNTIME TRACKING + SS SEKALI
-# ============================================================
-check_crash() {
-    local pkg="$1" name="$2"
-    # Skip kalau bot lagi shutting down
-    [[ -f "${TMP_DIR}/rb_stopping" ]] && return 0
-    local now=$(date +%s)
-    local crash_time=$(get "crash_time_$pkg")
-    local ss_sent=$(get "crash_ss_$pkg")
-    local last_update=$(get "crash_update_$pkg")
-
-    # APP HIDUP
-    if alive "$pkg"; then
-        if [[ -n "$crash_time" ]]; then
-            local downtime=$((now - crash_time))
-            local downtime_str=$(format_duration "$downtime")
-            discord "✅ Recovered" "**$name** is back online!\nPackage: \`$pkg\`\nTotal downtime: **$downtime_str**" 3066993
-            set "crash_time_$pkg" ""
-            set "crash_ss_$pkg" ""
-            set "crash_update_$pkg" ""
-        fi
-        return 0
-    fi
-
-    # APP MATI
-    if [[ -z "$crash_time" ]]; then
-        set "crash_time_$pkg" "$now"
-        crash_time="$now"
-    fi
-
-    local downtime=$((now - crash_time))
-    local downtime_str=$(format_duration "$downtime")
-
-    # Kirim notif PERTAMA dengan screenshot
-    if [[ -z "$ss_sent" ]]; then
-        discord "💀 Crash Detected" "**$name** has crashed!\nPackage: \`$pkg\`\nDowntime: **$downtime_str**" 16711680 "$(ss)"
-        set "crash_ss_$pkg" "1"
-        set "crash_update_$pkg" "$now"
-        return 0
-    fi
-
-    # Update downtime tiap UPDATE_INTERVAL
-    if [[ -n "$last_update" && $((now - last_update)) -lt $UPDATE_INTERVAL ]]; then
-        return 0
-    fi
-
-    discord "💀 Still Down" "**$name** is still crashed.\nPackage: \`$pkg\`\nDowntime: **$downtime_str**" 16711680
-    set "crash_update_$pkg" "$now"
+    echo "$now" > "$last_prot_file"
 }
 
 # ============================================================
@@ -212,21 +130,19 @@ cleanup() {
     init_packages
     for pkg in "${PACKAGES[@]}"; do su -c "am force-stop $pkg 2>/dev/null"; done
     rm -f "$PID_FILE"
+    rm -f "$START_TIME_FILE"
     rm -f "${TMP_DIR}"/rb_*.png 2>/dev/null
-    rm -f "${TMP_DIR}/rb_stopping" 2>/dev/null
+    rm -f "${TMP_DIR}"/protected_*_time 2>/dev/null
 }
 
 # ============================================================
-# DAEMON MODE
+# DAEMON MODE — Screenshot tiap menit + uptime tracking
 # ============================================================
 if [[ "$1" == "daemon" ]]; then
     echo $$ > "$PID_FILE"
-    rm -f "${TMP_DIR}/rb_stopping" 2>/dev/null
-    init_db
-    # Reset crash state dari run sebelumnya
-    db "DELETE FROM state WHERE key LIKE 'crash_%';"
+    date +%s > "$START_TIME_FILE"
     init_packages
-    trap 'touch "${TMP_DIR}/rb_stopping" 2>/dev/null; cleanup; exit 0' SIGTERM SIGINT
+    trap 'cleanup; exit 0' SIGTERM SIGINT
 
     [[ ${#PACKAGES[@]} -eq 0 ]] && { discord "❌ Error" "No packages found." 16711680; exit 1; }
 
@@ -236,42 +152,44 @@ if [[ "$1" == "daemon" ]]; then
     for pkg in "${PACKAGES[@]}"; do
         startup_msg+="• \`$pkg\`\n"
     done
-    startup_msg+="\n⏱️ **Intervals:**\n"
-    startup_msg+="• ⚡ Crash check: ${CHECK_INTERVAL}s\n"
-    startup_msg+="• 📊 Downtime update: ${UPDATE_INTERVAL}s\n\n"
-    startup_msg+="⚠️ **Auto-restart: DISABLED**\n"
-    startup_msg+="Crash = notif + screenshot (1x) + downtime tracking."
+    startup_msg+="\n📸 **Screenshot every ${SCREENSHOT_INTERVAL}s**\n"
+    startup_msg+="🔴 Crash detection: **DISABLED**\n"
+    startup_msg+="🛡️ OOM protect: every ${PROTECT_INTERVAL}s"
     discord "🚀 RobloxBot Started" "$startup_msg" 3066993
 
-    # Fresh start — kill unwanted apps sekali, baru launch Roblox
-    while IFS= read -r pkg; do
-        pkg="${pkg#package:}"
-        [[ "$pkg" == com.termux* ]] && continue
-        [[ "$pkg" == $PACKAGE_PREFIX* ]] && continue
-        su -c "am force-stop '$pkg' 2>/dev/null"
-    done < <(su -c "pm list packages -3" 2>/dev/null)
-
+    # Launch sekali di awal
     for pkg in "${PACKAGES[@]}"; do
-        su -c "am force-stop $pkg 2>/dev/null"
-    done
-    sleep 2
-
-    # Launch sekali
-    local i=0
-    for pkg in "${PACKAGES[@]}"; do
-        launch "$pkg" "${pkg##*.}"
-        (( i++ )); (( i < ${#PACKAGES[@]} )) && sleep 30
+        su -c "am start -a android.intent.action.VIEW -d '$ROBLOX_URL' -p $pkg" >/dev/null 2>&1
     done
 
-    # LOOP UTAMA
+    local last_protect=0
+    local last_screenshot=0
 
+    # LOOP UTAMA — Ringan banget
     while true; do
-        # 1. Cek crash — tiap 2 detik
-        for pkg in "${PACKAGES[@]}"; do
-            check_crash "$pkg" "${pkg##*.}"
-        done
+        local now=$(date +%s)
 
-        sleep "$CHECK_INTERVAL"
+        # 1. Protect app tiap 5 menit
+        if [[ $((now - last_protect)) -ge $PROTECT_INTERVAL ]]; then
+            for pkg in "${PACKAGES[@]}"; do
+                protect_app "$pkg"
+            done
+            last_protect=$now
+        fi
+
+        # 2. Screenshot tiap 1 menit
+        if [[ $((now - last_screenshot)) -ge $SCREENSHOT_INTERVAL ]]; then
+            local s
+            s=$(ss)
+            if [[ -n "$s" ]]; then
+                local time_str=$(date "+%H:%M:%S")
+                local uptime=$(get_uptime)
+                discord "📸 Screenshot" "**Time:** \`$time_str\`\n**⏱️ Uptime:** \`$uptime\`\nAuto-capture every ${SCREENSHOT_INTERVAL}s" 3447003 "$s"
+            fi
+            last_screenshot=$now
+        fi
+
+        sleep 5
     done
     exit 0
 fi
@@ -281,13 +199,14 @@ fi
 # ============================================================
 if [[ "$1" == "start" ]]; then
     if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-        discord "⚠️ Already Running" "Bot is already running.\nPID: $(cat $PID_FILE)" 16776960
+        local uptime=$(get_uptime)
+        discord "⚠️ Already Running" "Bot is already running.\nPID: $(cat $PID_FILE)\n⏱️ Uptime: \`$uptime\`" 16776960
         exit 1
     fi
     nohup bash "$0" daemon >/dev/null 2>&1 &
     sleep 1
     if [[ -f "$PID_FILE" ]]; then
-        discord "✅ Started" "Bot daemon started.\nPID: $(cat $PID_FILE)\n\n⚡ Crash check: ${CHECK_INTERVAL}s\n📊 Downtime update: ${UPDATE_INTERVAL}s\n\n⚠️ Auto-restart: DISABLED" 3066993
+        discord "✅ Started" "Bot daemon started.\nPID: $(cat $PID_FILE)\n\n📸 Screenshot: every ${SCREENSHOT_INTERVAL}s\n🔴 Crash detect: DISABLED" 3066993
     else
         discord "❌ Failed" "Failed to start daemon." 16711680
     fi
@@ -298,9 +217,10 @@ fi
 # STOP
 # ============================================================
 if [[ "$1" == "stop" ]]; then
-    touch "${TMP_DIR}/rb_stopping" 2>/dev/null
     init_packages
+    local uptime=$(get_uptime)
     local stop_msg="🛑 **Bot Stopped**\n"
+    stop_msg+="⏱️ Total uptime: \`$uptime\`\n"
     if [[ -f "$PID_FILE" ]]; then
         local old_pid=$(cat "$PID_FILE")
         kill "$old_pid" 2>/dev/null
@@ -332,30 +252,25 @@ if [[ "$1" == "status" ]]; then
     init_packages
     local status_msg=""
     local color=3447003
+    local uptime=$(get_uptime)
 
     if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
         status_msg="🟢 **Running**\n"
-        status_msg+="🆔 PID: $(cat $PID_FILE)\n\n"
+        status_msg+="🆔 PID: $(cat $PID_FILE)\n"
+        status_msg+="⏱️ Uptime: \`$uptime\`\n\n"
         color=3066993
     else
         status_msg="🔴 **Stopped**\n\n"
         color=16711680
     fi
 
-    status_msg+="⏱️ **Intervals:**\n"
-    status_msg+="• ⚡ Crash check: ${CHECK_INTERVAL}s\n"
-    status_msg+="• 📊 Downtime update: ${UPDATE_INTERVAL}s\n\n"
-
-    status_msg+="⚠️ **Auto-restart: DISABLED**\n\n"
+    status_msg+="📸 **Screenshot:** every ${SCREENSHOT_INTERVAL}s\n"
+    status_msg+="🔴 **Crash detect:** DISABLED\n"
+    status_msg+="🛡️ **OOM protect:** every ${PROTECT_INTERVAL}s\n\n"
 
     status_msg+="📦 **Packages (${#PACKAGES[@]}):**\n"
     for pkg in "${PACKAGES[@]}"; do
-        local name="${pkg##*.}"
-        if alive "$pkg"; then
-            status_msg+="• 🟢 \`$name\` — $pkg\n"
-        else
-            status_msg+="• 🔴 \`$name\` — $pkg\n"
-        fi
+        status_msg+="• \`${pkg##*.}\` — $pkg\n"
     done
 
     discord "📊 Status" "$status_msg" $color
@@ -367,7 +282,7 @@ fi
 # ============================================================
 if [[ "$1" == "test-webhook" ]]; then
     [[ -z "$DISCORD_WEBHOOK" ]] && { discord "❌ Error" "No webhook configured" 16711680; exit 1; }
-    discord "🧪 Test" "Webhook working! (Simple + Gentle version)" 3447003
+    discord "🧪 Test" "Webhook working! (Lightweight + Uptime version)" 3447003
     exit 0
 fi
 
@@ -378,7 +293,8 @@ if [[ "$1" == "test-screenshot" ]]; then
     local s
     s=$(ss)
     if [[ -n "$s" ]]; then
-        discord "🧪 Screenshot Test" "Screenshot captured and sent." 3447003 "$s"
+        local uptime=$(get_uptime)
+        discord "🧪 Screenshot Test" "Screenshot captured.\n⏱️ Uptime: \`$uptime\`" 3447003 "$s"
     else
         discord "❌ Failed" "Failed to capture screenshot." 16711680
     fi
@@ -386,34 +302,23 @@ if [[ "$1" == "test-screenshot" ]]; then
 fi
 
 # ============================================================
-# RESET STATE
-# ============================================================
-if [[ "$1" == "reset-state" ]]; then
-    rm -f "$STATE_FILE"
-    rm -f "${TMP_DIR}"/rb_*.png 2>/dev/null
-    discord "🔄 Reset" "State DB and temp files reset successfully." 3447003
-    exit 0
-fi
-
-# ============================================================
 # HELP
 # ============================================================
-help_msg="🎮 **RobloxBot | SIMPLE + GENTLE**\n\n"
+help_msg="🎮 **RobloxBot | LIGHTWEIGHT + UPTIME**\n\n"
 help_msg+="**Usage:**\n"
 help_msg+="\`start\` — Start daemon\n"
 help_msg+="\`stop\` — Stop daemon & kill Roblox\n"
 help_msg+="\`restart\` — Restart daemon\n"
-help_msg+="\`status\` — Check status (sends to Discord)\n"
+help_msg+="\`status\` — Check status + uptime\n"
 help_msg+="\`test-webhook\` — Test Discord webhook\n"
-help_msg+="\`test-screenshot\` — Test screenshot\n"
-help_msg+="\`reset-state\` — Reset state DB\n\n"
-help_msg+="**⏱️ Intervals (cuma 3):**\n"
-help_msg+="• Crash check: ${CHECK_INTERVAL}s\n"
-help_msg+="• Downtime update: ${UPDATE_INTERVAL}s\n\n"
+help_msg+="\`test-screenshot\` — Test screenshot\n\n"
+help_msg+="**⏱️ Intervals:**\n"
+help_msg+="• 📸 Screenshot: every ${SCREENSHOT_INTERVAL}s\n"
+help_msg+="• 🛡️ OOM protect: every ${PROTECT_INTERVAL}s\n\n"
 help_msg+="**🔒 Features:**\n"
-help_msg+="• Auto-restart: **DISABLED**\n"
-help_msg+="• Screenshot: **1x per crash**\n"
-help_msg+="• Downtime: tracked & updated\n"
+help_msg+="• Crash detection: **DISABLED**\n"
+help_msg+="• Screenshot: **auto every ${SCREENSHOT_INTERVAL}s**\n"
+help_msg+="• Uptime tracking: **enabled**\n"
 help_msg+="• All output: Discord only"
 
 discord "❓ Help" "$help_msg" 3447003
