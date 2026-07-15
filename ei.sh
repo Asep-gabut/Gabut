@@ -167,8 +167,7 @@ if [[ "$1" == "daemon" ]]; then
     for pkg in "${PACKAGES[@]}"; do
         startup_msg+="• \`$pkg\`\n"
     done
-    startup_msg+="\n📸 **Screenshot every ${SCREENSHOT_INTERVAL}s**\n"
-    startup_msg+="🔴 Crash detection: **DISABLED**\n"
+    startup_msg+="\n📸 **Screenshot delay ${SCREENSHOT_INTERVAL}s**\n"
     startup_msg+="⏳ Launch delay: ${LAUNCH_DELAY}s between apps\n"
     startup_msg+="🛡️ PID timeout: ${PID_TIMEOUT}s"
     discord "🚀 RobloxBot Started" "$startup_msg" 3066993
@@ -286,8 +285,7 @@ if [[ "$1" == "status" ]]; then
         fi
     done
 
-    status_msg+="\n📸 **Screenshot:** every ${SCREENSHOT_INTERVAL}s\n"
-    status_msg+="🔴 **Crash detect:** DISABLED\n"
+    status_msg+="\n📸 **Screenshot:** delay ${SCREENSHOT_INTERVAL}s\n"
     status_msg+="⏳ **Launch delay:** ${LAUNCH_DELAY}s\n"
     status_msg+="🛡️ **PID timeout:** ${PID_TIMEOUT}s"
 
