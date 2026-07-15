@@ -102,24 +102,26 @@ format_duration() {
 # CHECK APP ALIVE — FIXED ANTI FALSE DETECT
 # ============================================================
 alive() {
-    local pkg="$1"
-    local pid
+    local pkg="$1" pids
 
-    # METHOD 1: Cari PID dengan pgrep -f (full match, bukan exact)
-    # -f = match full command line, bukan cuma process name
-    pid=$(su -c "pgrep -f '$pkg' 2>/dev/null" | head -1)
-    [[ -n "$pid" ]] && {
-        [[ -d "/proc/$pid" ]] || return 1
-        local st=$(su -c "cat /proc/$pid/stat 2>/dev/null | awk '{print \$3}'" 2>/dev/null)
-        [[ "$st" == "Z" ]] && return 1
-        return 0
-    }
+    # METHOD 1: Cek process via ps
+    pids=$(su -c "ps -A | grep '$pkg' | grep -v grep | awk '{print \$2}'" 2>/dev/null)
+    if [[ -n "$pids" ]]; then
+        for pid in $pids; do
+            local st=$(su -c "cat /proc/$pid/stat 2>/dev/null | awk '{print \$3}'" 2>/dev/null)
+            [[ "$st" == "Z" ]] && continue
+            [[ -d "/proc/$pid" ]] || continue
+            # PID valid dan hidup, lanjut cek activity
+            break
+        done
+    fi
 
-    # METHOD 2: Cek via dumpsys activity processes
-    su -c "dumpsys activity processes 2>/dev/null" | grep -q "$pkg" 2>/dev/null && return 0
+    # METHOD 2: Cek activity state (Resumed/Paused/Stopped = hidup)
+    local act=$(su -c "dumpsys activity activities 2>/dev/null | grep -E '$pkg.*(Resumed|Paused|Stopped)' | grep -v ' finishing' | grep -v ' destroyed' | head -1" 2>/dev/null)
+    [[ -n "$act" ]] && return 0
 
-    # METHOD 3: Cek via ps
-    su -c "ps -A 2>/dev/null" | grep -q "$pkg" 2>/dev/null && return 0
+    # METHOD 3: Cek window (fallback)
+    su -c "dumpsys window windows 2>/dev/null | grep -q '$pkg'" 2>/dev/null && return 0
 
     return 1
 }
