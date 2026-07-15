@@ -28,7 +28,7 @@ init_packages() {
 }
 
 # ============================================================
-# DISCORD
+# DISCORD — ORIGINAL PROVEN LOGIC
 # ============================================================
 discord() {
     local title="$1" desc="$2" color="${3:-3447003}" img="$4"
@@ -64,7 +64,7 @@ discord() {
 }
 
 # ============================================================
-# SCREENSHOT
+# SCREENSHOT — ORIGINAL PROVEN LOGIC
 # ============================================================
 ss() {
     local p="${TMP_DIR}/rb_$(date +%s)_$$.png"
@@ -73,16 +73,14 @@ ss() {
 }
 
 # ============================================================
-# FORMAT DURATION
+# FORMAT DURATION — ORIGINAL PROVEN LOGIC
 # ============================================================
 format_duration() {
     local seconds="$1"
-    local d=$((seconds / 86400))
-    local h=$(((seconds % 86400) / 3600))
+    local h=$((seconds / 3600))
     local m=$(((seconds % 3600) / 60))
     local s=$((seconds % 60))
     local result=""
-    [[ $d -gt 0 ]] && result+="${d}d "
     [[ $h -gt 0 ]] && result+="${h}h "
     [[ $m -gt 0 ]] && result+="${m}m "
     result+="${s}s"
@@ -104,7 +102,7 @@ get_uptime() {
 }
 
 # ============================================================
-# PROTECT APP — Ringan, cuma tiap 5 menit
+# PROTECT APP — ORIGINAL PROVEN LOGIC (tanpa sqlite)
 # ============================================================
 protect_app() {
     local pkg="$1"
@@ -137,7 +135,7 @@ cleanup() {
 }
 
 # ============================================================
-# DAEMON MODE — Screenshot tiap menit + uptime tracking
+# DAEMON MODE — Screenshot tiap menit, logic original
 # ============================================================
 if [[ "$1" == "daemon" ]]; then
     echo $$ > "$PID_FILE"
@@ -170,7 +168,7 @@ if [[ "$1" == "daemon" ]]; then
     local last_protect=0
     local last_screenshot=0
 
-    # LOOP UTAMA — Ringan banget
+    # LOOP UTAMA
     while true; do
         local now=$(date +%s)
 
@@ -182,15 +180,12 @@ if [[ "$1" == "daemon" ]]; then
             last_protect=$now
         fi
 
-        # 2. Screenshot tiap 1 menit
+        # 2. Screenshot tiap 1 menit — PAKAI PATTERN ORIGINAL: "$(ss)"
         if [[ $((now - last_screenshot)) -ge $SCREENSHOT_INTERVAL ]]; then
-            local s
-            s=$(ss)
-            if [[ -n "$s" ]]; then
-                local time_str=$(date "+%H:%M:%S")
-                local uptime=$(get_uptime)
-                discord "📸 Screenshot" "**Time:** \`$time_str\`\n**⏱️ Uptime:** \`$uptime\`\nAuto-capture every ${SCREENSHOT_INTERVAL}s" 3447003 "$s"
-            fi
+            local time_str=$(date "+%H:%M:%S")
+            local uptime=$(get_uptime)
+            # PATTERN ORIGINAL: discord "title" "desc" color "$(ss)"
+            discord "📸 Screenshot" "**Time:** \`$time_str\`\n**⏱️ Uptime:** \`$uptime\`\nAuto-capture every ${SCREENSHOT_INTERVAL}s" 3447003 "$(ss)"
             last_screenshot=$now
         fi
 
@@ -288,29 +283,23 @@ fi
 # ============================================================
 if [[ "$1" == "test-webhook" ]]; then
     [[ -z "$DISCORD_WEBHOOK" ]] && { discord "❌ Error" "No webhook configured" 16711680; exit 1; }
-    discord "🧪 Test" "Webhook working! (Lightweight + Uptime version)" 3447003
+    discord "🧪 Test" "Webhook working! (Proven logic version)" 3447003
     exit 0
 fi
 
 # ============================================================
-# TEST SCREENSHOT
+# TEST SCREENSHOT — PAKAI PATTERN ORIGINAL
 # ============================================================
 if [[ "$1" == "test-screenshot" ]]; then
-    local s
-    s=$(ss)
-    if [[ -n "$s" ]]; then
-        local uptime=$(get_uptime)
-        discord "🧪 Screenshot Test" "Screenshot captured.\n⏱️ Uptime: \`$uptime\`" 3447003 "$s"
-    else
-        discord "❌ Failed" "Failed to capture screenshot." 16711680
-    fi
+    # PATTERN ORIGINAL: discord "title" "desc" color "$(ss)"
+    discord "🧪 Screenshot Test" "Testing screenshot with proven logic." 3447003 "$(ss)"
     exit 0
 fi
 
 # ============================================================
 # HELP
 # ============================================================
-help_msg="🎮 **RobloxBot | LIGHTWEIGHT + UPTIME**\n\n"
+help_msg="🎮 **RobloxBot | PROVEN LOGIC**\n\n"
 help_msg+="**Usage:**\n"
 help_msg+="\`start\` — Start daemon\n"
 help_msg+="\`stop\` — Stop daemon & kill Roblox\n"
