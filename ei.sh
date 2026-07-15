@@ -9,7 +9,7 @@ ROBLOX_URL="https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&t
 # INTERVAL SETTINGS — SIMPLE (cua 3)
 # ============================================================
 CHECK_INTERVAL=2          # Cek crash tiap 2 detik (RINGAN)
-UPDATE_INTERVAL=5          # Update downtime tiap 30 detik
+UPDATE_INTERVAL=30         # Update downtime tiap 30 detik (diubah dari 5 -> 30)
 
 # Internal intervals (nggak perlu diubah, cuma timestamp-based)
 PROTECT_INTERVAL=300        # Protect tiap 5 menit (internal)
@@ -99,25 +99,29 @@ format_duration() {
 }
 
 # ============================================================
-# CHECK APP ALIVE — ANTI FALSE DETECT
+# CHECK APP ALIVE — FIXED ANTI FALSE DETECT
 # ============================================================
 alive() {
     local pkg="$1"
     local pid
 
-    # Cari PID exact match
-    pid=$(su -c "pgrep -x '$pkg' 2>/dev/null" | head -1)
-    [[ -z "$pid" ]] && return 1
+    # METHOD 1: Cari PID dengan pgrep -f (full match, bukan exact)
+    # -f = match full command line, bukan cuma process name
+    pid=$(su -c "pgrep -f '$pkg' 2>/dev/null" | head -1)
+    [[ -n "$pid" ]] && {
+        [[ -d "/proc/$pid" ]] || return 1
+        local st=$(su -c "cat /proc/$pid/stat 2>/dev/null | awk '{print \$3}'" 2>/dev/null)
+        [[ "$st" == "Z" ]] && return 1
+        return 0
+    }
 
-    # PID valid dan bukan zombie?
-    [[ -d "/proc/$pid" ]] || return 1
-    local st=$(su -c "cat /proc/$pid/stat 2>/dev/null | awk '{print \$3}'" 2>/dev/null)
-    [[ "$st" == "Z" ]] && return 1
+    # METHOD 2: Cek via dumpsys activity processes
+    su -c "dumpsys activity processes 2>/dev/null" | grep -q "$pkg" 2>/dev/null && return 0
 
-    # Cek process masih di activity manager (anti false detect)
-    su -c "dumpsys activity processes 2>/dev/null | grep -q $pid" 2>/dev/null || return 1
+    # METHOD 3: Cek via ps
+    su -c "ps -A 2>/dev/null" | grep -q "$pkg" 2>/dev/null && return 0
 
-    return 0
+    return 1
 }
 
 
@@ -232,7 +236,7 @@ if [[ "$1" == "daemon" ]]; then
     done
     startup_msg+="\n⏱️ **Intervals:**\n"
     startup_msg+="• ⚡ Crash check: ${CHECK_INTERVAL}s\n"
-        startup_msg+="• 📊 Downtime update: ${UPDATE_INTERVAL}s\n\n"
+    startup_msg+="• 📊 Downtime update: ${UPDATE_INTERVAL}s\n\n"
     startup_msg+="⚠️ **Auto-restart: DISABLED**\n"
     startup_msg+="Crash = notif + screenshot (1x) + downtime tracking."
     discord "🚀 RobloxBot Started" "$startup_msg" 3066993
@@ -303,8 +307,7 @@ if [[ "$1" == "stop" ]]; then
         stop_msg+="• Killed PID: $old_pid\n"
     fi
     cleanup
-    stop_msg+="• Daemon stopped
-"
+    stop_msg+="• Daemon stopped\n"
     stop_msg+="• Temp files cleaned"
     discord "🛑 Stopped" "$stop_msg" 16711680
     exit 0
@@ -339,7 +342,6 @@ if [[ "$1" == "status" ]]; then
 
     status_msg+="⏱️ **Intervals:**\n"
     status_msg+="• ⚡ Crash check: ${CHECK_INTERVAL}s\n"
-    status_msg+="• "
     status_msg+="• 📊 Downtime update: ${UPDATE_INTERVAL}s\n\n"
 
     status_msg+="⚠️ **Auto-restart: DISABLED**\n\n"
@@ -385,7 +387,8 @@ fi
 # RESET STATE
 # ============================================================
 if [[ "$1" == "reset-state" ]]; then
-    rm -f "$STATE_FILE"    rm -f "${TMP_DIR}"/rb_*.png 2>/dev/null
+    rm -f "$STATE_FILE"
+    rm -f "${TMP_DIR}"/rb_*.png 2>/dev/null
     discord "🔄 Reset" "State DB and temp files reset successfully." 3447003
     exit 0
 fi
@@ -393,9 +396,7 @@ fi
 # ============================================================
 # HELP
 # ============================================================
-help_msg="🎮 **RobloxBot | SIMPLE + GENTLE**
-
-"
+help_msg="🎮 **RobloxBot | SIMPLE + GENTLE**\n\n"
 help_msg+="**Usage:**\n"
 help_msg+="\`start\` — Start daemon\n"
 help_msg+="\`stop\` — Stop daemon & kill Roblox\n"
@@ -411,6 +412,6 @@ help_msg+="**🔒 Features:**\n"
 help_msg+="• Auto-restart: **DISABLED**\n"
 help_msg+="• Screenshot: **1x per crash**\n"
 help_msg+="• Downtime: tracked & updated\n"
-help_msg+="help_msg+="• All output: Discord only"
+help_msg+="• All output: Discord only"
 
 discord "❓ Help" "$help_msg" 3447003
