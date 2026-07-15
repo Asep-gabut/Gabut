@@ -10,6 +10,7 @@ ROBLOX_URL="https://www.roblox.com/share?code=c398b5696d26e0449bb9c8e35be72152&t
 # ============================================================
 SCREENSHOT_INTERVAL=60     # Kirim SS tiap 60 detik (1 menit)
 PROTECT_INTERVAL=300         # Protect app tiap 5 menit
+LAUNCH_DELAY=35              # Delay antar launch (detik)
 
 DISCORD_WEBHOOK="https://discord.com/api/webhooks/1483451715104804964/o0vgYLS-zg4WUXHQM-GiaT0idCfzz-bqPAqRXi4ME0xjEQusxdA3zmEdRQIzUiHovOb3"
 DISCORD_PING_USER=""
@@ -154,12 +155,16 @@ if [[ "$1" == "daemon" ]]; then
     done
     startup_msg+="\n📸 **Screenshot every ${SCREENSHOT_INTERVAL}s**\n"
     startup_msg+="🔴 Crash detection: **DISABLED**\n"
-    startup_msg+="🛡️ OOM protect: every ${PROTECT_INTERVAL}s"
+    startup_msg+="🛡️ OOM protect: every ${PROTECT_INTERVAL}s\n"
+    startup_msg+="⏳ Launch delay: ${LAUNCH_DELAY}s between apps"
     discord "🚀 RobloxBot Started" "$startup_msg" 3066993
 
-    # Launch sekali di awal
+    # Launch dengan delay antar app
+    local i=0
     for pkg in "${PACKAGES[@]}"; do
         su -c "am start -a android.intent.action.VIEW -d '$ROBLOX_URL' -p $pkg" >/dev/null 2>&1
+        (( i++ ))
+        (( i < ${#PACKAGES[@]} )) && sleep "$LAUNCH_DELAY"
     done
 
     local last_protect=0
@@ -266,7 +271,8 @@ if [[ "$1" == "status" ]]; then
 
     status_msg+="📸 **Screenshot:** every ${SCREENSHOT_INTERVAL}s\n"
     status_msg+="🔴 **Crash detect:** DISABLED\n"
-    status_msg+="🛡️ **OOM protect:** every ${PROTECT_INTERVAL}s\n\n"
+    status_msg+="🛡️ **OOM protect:** every ${PROTECT_INTERVAL}s\n"
+    status_msg+="⏳ **Launch delay:** ${LAUNCH_DELAY}s\n\n"
 
     status_msg+="📦 **Packages (${#PACKAGES[@]}):**\n"
     for pkg in "${PACKAGES[@]}"; do
@@ -314,7 +320,8 @@ help_msg+="\`test-webhook\` — Test Discord webhook\n"
 help_msg+="\`test-screenshot\` — Test screenshot\n\n"
 help_msg+="**⏱️ Intervals:**\n"
 help_msg+="• 📸 Screenshot: every ${SCREENSHOT_INTERVAL}s\n"
-help_msg+="• 🛡️ OOM protect: every ${PROTECT_INTERVAL}s\n\n"
+help_msg+="• 🛡️ OOM protect: every ${PROTECT_INTERVAL}s\n"
+help_msg+="• ⏳ Launch delay: ${LAUNCH_DELAY}s between apps\n\n"
 help_msg+="**🔒 Features:**\n"
 help_msg+="• Crash detection: **DISABLED**\n"
 help_msg+="• Screenshot: **auto every ${SCREENSHOT_INTERVAL}s**\n"
