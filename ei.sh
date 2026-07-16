@@ -132,10 +132,10 @@ protect_app() {
 }
 
 # ============================================================
-# BUILD MESSAGE — Pake printf ke file (overwrite, nggak append)
+# BUILD MESSAGE — Pake printf ke file
 # ============================================================
 build_msg() {
-    > "$MSG_FILE"  # Kosongkan file
+    > "$MSG_FILE"
 
     local time_str=$(date "+%H:%M:%S")
     local uptime=$(get_uptime)
@@ -155,6 +155,17 @@ build_msg() {
     done
 
     cat "$MSG_FILE"
+}
+
+# ============================================================
+# MAIN LOOP — Function biar bisa pake local
+# ============================================================
+main_loop() {
+    while true; do
+        local msg=$(build_msg)
+        discord "📸 Screenshot" "$msg" 3447003 "$(ss)"
+        sleep "$SCREENSHOT_INTERVAL"
+    done
 }
 
 # ============================================================
@@ -201,11 +212,8 @@ if [[ "$1" == "daemon" ]]; then
         (( i < ${#PACKAGES[@]} )) && sleep "$LAUNCH_DELAY"
     done
 
-    # LOOP UTAMA — printf ke file, cat file, kirim
-    while true; do
-        discord "📸 Screenshot" "$(build_msg)" 3447003 "$(ss)"
-        sleep "$SCREENSHOT_INTERVAL"
-    done
+    # Panggil loop function
+    main_loop
     exit 0
 fi
 
@@ -303,7 +311,7 @@ fi
 # ============================================================
 if [[ "$1" == "test-webhook" ]]; then
     [[ -z "$DISCORD_WEBHOOK" ]] && { discord "❌ Error" "No webhook configured" 16711680; exit 1; }
-    discord "🧪 Test" "Webhook working! (printf version)" 3447003
+    discord "🧪 Test" "Webhook working! (local fix version)" 3447003
     exit 0
 fi
 
@@ -318,7 +326,7 @@ fi
 # ============================================================
 # HELP
 # ============================================================
-help_msg="🎮 **RobloxBot | PRINTF VERSION**\n\n"
+help_msg="🎮 **RobloxBot | LOCAL FIX**\n\n"
 help_msg+="**Usage:**\n"
 help_msg+="\`start\` — Start daemon\n"
 help_msg+="\`stop\` — Stop daemon & kill Roblox\n"
@@ -333,7 +341,7 @@ help_msg+="• 🛡️ PID timeout: ${PID_TIMEOUT}s\n\n"
 help_msg+="**🔒 Features:**\n"
 help_msg+="• Crash detection: **DISABLED**\n"
 help_msg+="• Screenshot: **auto every ${SCREENSHOT_INTERVAL}s**\n"
-help_msg+="• Message build: **printf to file (no accumulation)**\n"
+help_msg+="• Local fix: **main_loop function**\n"
 help_msg+="• All output: Discord only"
 
 discord "❓ Help" "$help_msg" 3447003
