@@ -31,7 +31,7 @@ init_packages() {
 }
 
 # ============================================================
-# JSON ESCAPE — Pure bash, no sed newline issues
+# JSON ESCAPE — Pure bash, escape quote & real newlines only
 # ============================================================
 json_escape() {
     local input="$1"
@@ -40,7 +40,6 @@ json_escape() {
     for ((i=0; i<${#input}; i++)); do
         c="${input:$i:1}"
         case "$c" in
-            '\\') output+='\\\\' ;;
             '"')  output+='\\"' ;;
             $'\n') output+='\\n' ;;
             $'\r') output+='\\r' ;;
