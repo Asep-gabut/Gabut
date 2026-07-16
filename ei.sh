@@ -193,7 +193,7 @@ if [[ "$1" == "daemon" ]]; then
     [[ ${#PACKAGES[@]} -eq 0 ]] && { discord "❌ Error" "No packages found." 16711680; exit 1; }
 
     # Startup
-    local startup_msg="🚀 **Daemon Started**\n"
+    startup_msg="🚀 **Daemon Started**\n"
     startup_msg+="📦 Packages: ${#PACKAGES[@]}\n"
     for pkg in "${PACKAGES[@]}"; do
         startup_msg+="• \`$pkg\`\n"
@@ -204,7 +204,7 @@ if [[ "$1" == "daemon" ]]; then
     discord "🚀 RobloxBot Started" "$startup_msg" 3066993
 
     # Launch + protect
-    local i=0
+    i=0
     for pkg in "${PACKAGES[@]}"; do
         su -c "am start -a android.intent.action.VIEW -d '$ROBLOX_URL' -p $pkg" >/dev/null 2>&1
         protect_app "$pkg"
@@ -222,7 +222,7 @@ fi
 # ============================================================
 if [[ "$1" == "start" ]]; then
     if [[ -f "$PID_FILE" ]]; then
-        local old_pid=$(cat "$PID_FILE" 2>/dev/null)
+        old_pid=$(cat "$PID_FILE" 2>/dev/null)
         if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
             discord "⚠️ Already Running" "Bot is already running.\nPID: $old_pid" 16776960
             exit 1
@@ -243,11 +243,11 @@ fi
 # ============================================================
 if [[ "$1" == "stop" ]]; then
     init_packages
-    local uptime=$(get_uptime)
-    local stop_msg="🛑 **Bot Stopped**\n"
+    uptime=$(get_uptime)
+    stop_msg="🛑 **Bot Stopped**\n"
     stop_msg+="⏱️ Total uptime: \`$uptime\`\n"
     if [[ -f "$PID_FILE" ]]; then
-        local old_pid=$(cat "$PID_FILE")
+        old_pid=$(cat "$PID_FILE")
         kill "$old_pid" 2>/dev/null
         sleep 1
         kill -9 "$old_pid" 2>/dev/null
@@ -275,9 +275,9 @@ fi
 # ============================================================
 if [[ "$1" == "status" ]]; then
     init_packages
-    local status_msg=""
-    local color=3447003
-    local has_timeout=0
+    status_msg=""
+    color=3447003
+    has_timeout=0
 
     if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
         status_msg="🟢 **Bot Running**\n"
