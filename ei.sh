@@ -31,6 +31,27 @@ init_packages() {
 }
 
 # ============================================================
+# JSON ESCAPE — Pure bash, no sed newline issues
+# ============================================================
+json_escape() {
+    local input="$1"
+    local output=""
+    local i c
+    for ((i=0; i<${#input}; i++)); do
+        c="${input:$i:1}"
+        case "$c" in
+            '\\') output+='\\\\' ;;
+            '"')  output+='\\"' ;;
+            $'\n') output+='\\n' ;;
+            $'\r') output+='\\r' ;;
+            $'\t') output+='\\t' ;;
+            *)    output+="$c" ;;
+        esac
+    done
+    printf '%s' "$output"
+}
+
+# ============================================================
 # DISCORD
 # ============================================================
 discord() {
@@ -43,6 +64,10 @@ discord() {
     local ts
     ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
+    local title_escaped desc_escaped
+    title_escaped=$(json_escape "$title")
+    desc_escaped=$(json_escape "$desc")
+
     if [[ -n "$img" && -f "$img" ]]; then
         local b="----BotBoundary$(date +%s)"
         {
@@ -50,7 +75,7 @@ discord() {
             echo 'Content-Disposition: form-data; name="payload_json"'
             echo 'Content-Type: application/json'
             echo ""
-            echo "{\"content\":\"${ping}\",\"embeds\":[{\"title\":\"$title\",\"description\":\"$desc\",\"color\":$color,\"timestamp\":\"$ts\",\"footer\":{\"text\":\"Roblox Bot\"}}]}"
+            echo "{\"content\":\"${ping}\",\"embeds\":[{\"title\":\"$title_escaped\",\"description\":\"$desc_escaped\",\"color\":$color,\"timestamp\":\"$ts\",\"footer\":{\"text\":\"Roblox Bot\"}}]}"
             echo "--$b"
             echo 'Content-Disposition: form-data; name="file"; filename="screenshot.png"'
             echo 'Content-Type: image/png'
@@ -62,7 +87,7 @@ discord() {
 
         rm -f "$img"
     else
-        curl -s -H "Content-Type: application/json" -X POST -d "{\"content\":\"${ping}\",\"embeds\":[{\"title\":\"$title\",\"description\":\"$desc\",\"color\":$color,\"timestamp\":\"$ts\",\"footer\":{\"text\":\"Roblox Bot\"}}]}" "$DISCORD_WEBHOOK" >/dev/null 2>&1 &
+        curl -s -H "Content-Type: application/json" -X POST -d "{\"content\":\"${ping}\",\"embeds\":[{\"title\":\"$title_escaped\",\"description\":\"$desc_escaped\",\"color\":$color,\"timestamp\":\"$ts\",\"footer\":{\"text\":\"Roblox Bot\"}}]}" "$DISCORD_WEBHOOK" >/dev/null 2>&1 &
     fi
 }
 
