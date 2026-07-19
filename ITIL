@@ -11,6 +11,7 @@ local PRIORITY = {
     ["Motoro Stingray"] = true,
     ["Sand Tiger Shark"] = true,
     ["Wobbegong Shark"] = true,
+    ["Cataclysm Carp"] = true,
 }
 
 local function catchFish(fish)
