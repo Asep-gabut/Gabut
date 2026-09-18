@@ -5,7 +5,6 @@ local currentUniverseID = game.GameId
 local games = {
        [5750914919] = "https://raw.githubusercontent.com/Asep-gabut/Gabut/refs/heads/main/ITIL", --Fisch
        [6993600665] = "https://raw.githubusercontent.com/Asep-gabut/Gabut/refs/heads/main/esp", --defusal
-       [6701277882] = "https://raw.githubusercontent.com/Asep-gabut/Gabut/refs/heads/main/luck%20fish%20it", --Fish it
        [7629331599] = "https://raw.githubusercontent.com/Asep-gabut/Gabut/refs/heads/main/prospek", --prospecting
 }
 
