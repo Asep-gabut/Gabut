@@ -1,6 +1,6 @@
 -- ============================================
--- AUTO FARM DUNGEON - MOBILE EDITION (v20)
--- AlignOrientation face + no walkspeed
+-- AUTO FARM DUNGEON - MOBILE EDITION (v23)
+-- Base = v18 + AO face (minimal change)
 -- ============================================
 
 local Players = game:GetService("Players")
@@ -16,7 +16,9 @@ local CONFIG = {
     KeepDistance = 30,
     AttackCooldown = 0.5,
     AutoUpgrade = true,
+    UseShiftlock = false,
     KiteSpeed = 1.2,
+    UseAO = true,              -- toggle AO face
     FaceSmoothness = 30,
 }
 
@@ -29,14 +31,12 @@ local State = {
     LastUpgrade = 0,
     EnemyFolders = {},
     LastFolderScan = 0,
-    -- path
     PathWaypoints = nil,
     PathIndex = 1,
     PathEnemyRef = nil,
     PathTargetPos = nil,
     LastMoveToPos = nil,
     LastZone = nil,
-    -- AO
     Orientation = nil,
     OrientationAttach = nil,
 }
@@ -59,16 +59,15 @@ local function pressE()
     pcall(function() keyrelease(KEY_E) end)
 end
 
--- ============ ALIGN ORIENTATION ============
+-- ============ AO SETUP ============
 local function setupOrientation()
+    if not CONFIG.UseAO then return end
     if not State.RootPart then return end
     
     if State.Orientation then State.Orientation:Destroy() end
     if State.OrientationAttach then State.OrientationAttach:Destroy() end
     
-    if State.Humanoid then
-        State.Humanoid.AutoRotate = false
-    end
+    if State.Humanoid then State.Humanoid.AutoRotate = false end
     
     local attach = Instance.new("Attachment")
     attach.Name = "FarmFaceAttach"
@@ -92,21 +91,17 @@ local function cleanupOrientation()
         if State.OrientationAttach then State.OrientationAttach:Destroy() end
         State.Orientation = nil
         State.OrientationAttach = nil
-        if State.Humanoid then
-            State.Humanoid.AutoRotate = true
-        end
+        if State.Humanoid then State.Humanoid.AutoRotate = true end
     end)
 end
 
 local function faceTarget(enemy)
+    if not CONFIG.UseAO then return end
     if not State.Orientation or not State.RootPart then return end
     local _, hrp = getHumanoidAndHRP(enemy)
     if not hrp then return end
-    
     local myPos = State.RootPart.Position
-    local enemyPos = hrp.Position
-    local targetPos = Vector3.new(enemyPos.X, myPos.Y, enemyPos.Z)
-    
+    local targetPos = Vector3.new(hrp.Position.X, myPos.Y, hrp.Position.Z)
     State.Orientation.CFrame = CFrame.lookAt(myPos, targetPos)
 end
 
@@ -162,7 +157,6 @@ local function getEnemyFolders()
     return State.EnemyFolders
 end
 
--- ============ HUMANOID ============
 local function getHumanoidAndHRP(enemy)
     if not enemy or not enemy.Parent then return nil, nil end
     local hum = enemy:FindFirstChildOfClass("Humanoid") 
@@ -234,17 +228,14 @@ local function kiteAway(enemy)
     if not hrp then return end
     
     local myPos = State.RootPart.Position
-    local enemyPos = hrp.Position
-    
-    local awayDir = myPos - enemyPos
+    local awayDir = myPos - hrp.Position
     awayDir = Vector3.new(awayDir.X, 0, awayDir.Z)
     if awayDir.Magnitude < 0.1 then return end
-    awayDir = awayDir.Unit
     
-    State.Humanoid:Move(awayDir * CONFIG.KiteSpeed)
+    State.Humanoid:Move(awayDir.Unit * CONFIG.KiteSpeed)
 end
 
--- ============ WALK ============
+-- ============ WALK (kaya v18) ============
 local function walkToEnemy(enemy)
     if not State.Humanoid or not State.RootPart then return end
     local _, hrp = getHumanoidAndHRP(enemy)
@@ -258,8 +249,7 @@ local function walkToEnemy(enemy)
     if State.PathEnemyRef ~= enemy then needRecompute = true end
     if State.PathWaypoints and State.PathIndex > #State.PathWaypoints then needRecompute = true end
     if State.PathTargetPos then
-        local moved = (enemyPos - State.PathTargetPos).Magnitude
-        if moved > 10 then needRecompute = true end
+        if (enemyPos - State.PathTargetPos).Magnitude > 10 then needRecompute = true end
     end
     
     if needRecompute then
@@ -267,11 +257,7 @@ local function walkToEnemy(enemy)
             AgentRadius = 3, AgentHeight = 5, AgentCanJump = true,
             AgentJumpHeight = 10, AgentMaxSlope = 45,
         })
-        
-        local ok = pcall(function()
-            path:ComputeAsync(myPos, enemyPos)
-        end)
-        
+        local ok = pcall(function() path:ComputeAsync(myPos, enemyPos) end)
         if ok and path.Status == Enum.PathStatus.Success then
             State.PathWaypoints = path:GetWaypoints()
             State.PathIndex = 2
@@ -279,11 +265,7 @@ local function walkToEnemy(enemy)
             State.PathEnemyRef = enemy
             State.LastMoveToPos = nil
         else
-            if not State.LastMoveToPos 
-                or (State.LastMoveToPos - enemyPos).Magnitude > 3 then
-                State.Humanoid:MoveTo(enemyPos)
-                State.LastMoveToPos = enemyPos
-            end
+            State.Humanoid:MoveTo(enemyPos)
             return
         end
     end
@@ -291,7 +273,6 @@ local function walkToEnemy(enemy)
     if State.PathWaypoints and State.PathIndex <= #State.PathWaypoints then
         local wp = State.PathWaypoints[State.PathIndex]
         local distToWp = (myPos - wp.Position).Magnitude
-        
         if distToWp <= 4 then
             State.PathIndex = State.PathIndex + 1
             if State.PathIndex <= #State.PathWaypoints then
@@ -336,17 +317,11 @@ local function mainLoop()
         task.wait(0.05)
 
         if not State.Character or not State.Character.Parent then
-            task.wait(0.5)
-            continue
+            task.wait(0.5) continue
         end
+        if State.Humanoid.Health <= 0 then task.wait(1) continue end
 
-        if State.Humanoid.Health <= 0 then
-            task.wait(1)
-            continue
-        end
-
-        -- pastiin AO masih ada
-        if not State.Orientation or not State.Orientation.Parent then
+        if CONFIG.UseAO and (not State.Orientation or not State.Orientation.Parent) then
             setupOrientation()
         end
 
@@ -357,36 +332,24 @@ local function mainLoop()
         local enemy, count, roomInfo = findNearestEnemy()
 
         if enemy then
-            -- face enemy tiap frame
-            faceTarget(enemy)
+            if CONFIG.UseAO then faceTarget(enemy) end
             
             local _, ehrp = getHumanoidAndHRP(enemy)
             if ehrp then
                 local dist = (ehrp.Position - State.RootPart.Position).Magnitude
-                
                 local buffer = 8
                 local zone = State.LastZone
-                
-                local shouldKite = false
-                local shouldAttack = false
-                local shouldApproach = false
+                local shouldKite, shouldAttack, shouldApproach = false, false, false
                 
                 if dist < CONFIG.KeepDistance - 3 then
                     shouldKite = true
                 elseif zone == "Attack" then
-                    if dist <= CONFIG.AttackDistance + buffer then
-                        shouldAttack = true
-                    else
-                        shouldApproach = true
-                    end
+                    if dist <= CONFIG.AttackDistance + buffer then shouldAttack = true
+                    else shouldApproach = true end
                 else
-                    if dist <= CONFIG.AttackDistance then
-                        shouldAttack = true
-                    else
-                        shouldApproach = true
-                    end
+                    if dist <= CONFIG.AttackDistance then shouldAttack = true
+                    else shouldApproach = true end
                 end
-                
                 if zone == "Kite" and dist < CONFIG.KeepDistance + 3 then
                     shouldKite = true
                     shouldAttack = false
@@ -424,12 +387,10 @@ local function mainLoop()
 end
 
 -- ============================================
---      UI
+--      UI (sama kaya v18 + toggle AO)
 -- ============================================
 local function createUI()
-    if CoreGui:FindFirstChild("AutoFarmUI") then
-        CoreGui.AutoFarmUI:Destroy()
-    end
+    if CoreGui:FindFirstChild("AutoFarmUI") then CoreGui.AutoFarmUI:Destroy() end
 
     local screenGui = Instance.new("ScreenGui")
     screenGui.Name = "AutoFarmUI"
@@ -450,11 +411,9 @@ local function createUI()
     statusOverlay.TextStrokeTransparency = 0.5
     statusOverlay.ZIndex = 5
     statusOverlay.Parent = screenGui
-
     local soCorner = Instance.new("UICorner")
     soCorner.CornerRadius = UDim.new(0, 8)
     soCorner.Parent = statusOverlay
-
     local soStroke = Instance.new("UIStroke")
     soStroke.Color = Color3.fromRGB(100, 200, 100)
     soStroke.Thickness = 1.5
@@ -478,11 +437,9 @@ local function createUI()
     floatBtn.Draggable = true
     floatBtn.ZIndex = 5
     floatBtn.Parent = screenGui
-
     local fbCorner = Instance.new("UICorner")
     fbCorner.CornerRadius = UDim.new(1, 0)
     fbCorner.Parent = floatBtn
-
     local fbStroke = Instance.new("UIStroke")
     fbStroke.Color = Color3.fromRGB(255, 255, 255)
     fbStroke.Thickness = 2
@@ -490,8 +447,8 @@ local function createUI()
     fbStroke.Parent = floatBtn
 
     local main = Instance.new("Frame")
-    main.Size = UDim2.new(0, 300, 0, 500)
-    main.Position = UDim2.new(0.5, -150, 0.5, -250)
+    main.Size = UDim2.new(0, 300, 0, 540)
+    main.Position = UDim2.new(0.5, -150, 0.5, -270)
     main.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
     main.BorderSizePixel = 0
     main.Active = true
@@ -499,11 +456,9 @@ local function createUI()
     main.Visible = false
     main.ZIndex = 10
     main.Parent = screenGui
-
     local mainCorner = Instance.new("UICorner")
     mainCorner.CornerRadius = UDim.new(0, 14)
     mainCorner.Parent = main
-
     local mainStroke = Instance.new("UIStroke")
     mainStroke.Color = Color3.fromRGB(80, 120, 255)
     mainStroke.Thickness = 2
@@ -515,11 +470,9 @@ local function createUI()
     title.BorderSizePixel = 0
     title.ZIndex = 11
     title.Parent = main
-
     local titleCorner = Instance.new("UICorner")
     titleCorner.CornerRadius = UDim.new(0, 14)
     titleCorner.Parent = title
-
     local titleFix = Instance.new("Frame")
     titleFix.Size = UDim2.new(1, 0, 0, 15)
     titleFix.Position = UDim2.new(0, 0, 1, -15)
@@ -551,11 +504,9 @@ local function createUI()
     closeBtn.BorderSizePixel = 0
     closeBtn.ZIndex = 12
     closeBtn.Parent = title
-
     local closeCorner = Instance.new("UICorner")
     closeCorner.CornerRadius = UDim.new(0, 8)
     closeCorner.Parent = closeBtn
-
     closeBtn.MouseButton1Click:Connect(function() main.Visible = false end)
 
     local scroll = Instance.new("ScrollingFrame")
@@ -569,7 +520,6 @@ local function createUI()
     scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
     scroll.ZIndex = 11
     scroll.Parent = main
-
     local layout = Instance.new("UIListLayout")
     layout.Padding = UDim.new(0, 8)
     layout.SortOrder = Enum.SortOrder.LayoutOrder
@@ -583,11 +533,9 @@ local function createUI()
         row.LayoutOrder = order
         row.ZIndex = 11
         row.Parent = scroll
-
         local rowCorner = Instance.new("UICorner")
         rowCorner.CornerRadius = UDim.new(0, 8)
         rowCorner.Parent = row
-
         local lbl = Instance.new("TextLabel")
         lbl.Size = UDim2.new(0.5, -10, 1, 0)
         lbl.Position = UDim2.new(0, 12, 0, 0)
@@ -599,7 +547,6 @@ local function createUI()
         lbl.TextXAlignment = Enum.TextXAlignment.Left
         lbl.ZIndex = 12
         lbl.Parent = row
-
         local box = Instance.new("TextBox")
         box.Size = UDim2.new(0.45, -15, 0, 32)
         box.Position = UDim2.new(0.5, 0, 0, 6)
@@ -612,11 +559,9 @@ local function createUI()
         box.ClearTextOnFocus = false
         box.ZIndex = 12
         box.Parent = row
-
         local boxCorner = Instance.new("UICorner")
         boxCorner.CornerRadius = UDim.new(0, 6)
         boxCorner.Parent = box
-
         box.FocusLost:Connect(function()
             local val = tonumber(box.Text)
             if val then callback(val) end
@@ -631,11 +576,9 @@ local function createUI()
         row.LayoutOrder = order
         row.ZIndex = 11
         row.Parent = scroll
-
         local rowCorner = Instance.new("UICorner")
         rowCorner.CornerRadius = UDim.new(0, 8)
         rowCorner.Parent = row
-
         local lbl = Instance.new("TextLabel")
         lbl.Size = UDim2.new(0.6, -10, 1, 0)
         lbl.Position = UDim2.new(0, 12, 0, 0)
@@ -647,7 +590,6 @@ local function createUI()
         lbl.TextXAlignment = Enum.TextXAlignment.Left
         lbl.ZIndex = 12
         lbl.Parent = row
-
         local btn = Instance.new("TextButton")
         btn.Size = UDim2.new(0, 70, 0, 32)
         btn.Position = UDim2.new(1, -82, 0, 6)
@@ -659,11 +601,9 @@ local function createUI()
         btn.BorderSizePixel = 0
         btn.ZIndex = 12
         btn.Parent = row
-
         local btnCorner = Instance.new("UICorner")
         btnCorner.CornerRadius = UDim.new(0, 8)
         btnCorner.Parent = btn
-
         local state = defaultVal
         btn.MouseButton1Click:Connect(function()
             state = not state
@@ -682,6 +622,10 @@ local function createUI()
         if State.Orientation then State.Orientation.Responsiveness = v end
     end)
     createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 6, function(v) CONFIG.AutoUpgrade = v end)
+    createToggle("Use AO Face", CONFIG.UseAO, 7, function(v) 
+        CONFIG.UseAO = v
+        if v then setupOrientation() else cleanupOrientation() end
+    end)
 
     local startBtn = Instance.new("TextButton")
     startBtn.Size = UDim2.new(1, 0, 0, 55)
@@ -691,10 +635,9 @@ local function createUI()
     startBtn.TextSize = 17
     startBtn.Font = Enum.Font.GothamBold
     startBtn.BorderSizePixel = 0
-    startBtn.LayoutOrder = 7
+    startBtn.LayoutOrder = 8
     startBtn.ZIndex = 11
     startBtn.Parent = scroll
-
     local startCorner = Instance.new("UICorner")
     startCorner.CornerRadius = UDim.new(0, 10)
     startCorner.Parent = startBtn
@@ -702,11 +645,11 @@ local function createUI()
     local footer = Instance.new("TextLabel")
     footer.Size = UDim2.new(1, 0, 0, 20)
     footer.BackgroundTransparency = 1
-    footer.Text = "v20 - no walkspeed"
+    footer.Text = "v23 - v18 + AO"
     footer.TextColor3 = Color3.fromRGB(120, 120, 130)
     footer.TextSize = 11
     footer.Font = Enum.Font.Gotham
-    footer.LayoutOrder = 8
+    footer.LayoutOrder = 9
     footer.ZIndex = 11
     footer.Parent = scroll
 
@@ -731,24 +674,18 @@ local function createUI()
             floatBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
             soStroke.Color = Color3.fromRGB(255, 100, 100)
             setStatus("Starting...")
-
             task.spawn(function()
                 startGame()
                 task.wait(1.5)
-                if CONFIG.AutoUpgrade then
-                    upgradeSpell()
-                    task.wait(0.5)
-                end
-                setupOrientation()
+                if CONFIG.AutoUpgrade then upgradeSpell() task.wait(0.5) end
+                if CONFIG.UseAO then setupOrientation() end
                 setStatus("Running")
                 mainLoop()
             end)
         end
     end)
-
     setStatus("Idle - tap ⚙")
 end
 
--- ============ INIT ============
 createUI()
-print("[AutoFarm Mobile v20] Loaded")
+print("[AutoFarm Mobile v23] Loaded - v18 + AO")
