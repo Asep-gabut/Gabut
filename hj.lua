@@ -1,6 +1,6 @@
 -- ============================================
--- AUTO FARM DUNGEON - MOBILE EDITION (v36)
--- Pathfinder non-blocking + skip waypoint
+-- AUTO FARM DUNGEON - MOBILE EDITION (v37)
+-- Smooth: compute sekali, follow semua waypoint
 -- ============================================
 
 local Players = game:GetService("Players")
@@ -17,17 +17,21 @@ local CONFIG = {
     AutoUpgrade = true,
     FacingThreshold = 0.5,
     StepForward = 1,
-    WaypointSkip = 3,       -- ⭐ skip 3 waypoint, ambil yang lebih jauh
-    WaypointReached = 5,    -- jarak dianggap nyampe waypoint
+    WaypointReached = 4,
+    TargetMoveThreshold = 10,   -- recompute kalau target geser > N stud
 }
 
 local State = {
     Running = false, Character = nil, Humanoid = nil, RootPart = nil,
     LastAttack = 0, LastUpgrade = 0,
     EnemyFolders = {}, LastFolderScan = 0,
-    PathBusy = false,        -- ⭐ flag lagi compute
+    -- path state
     PathWaypoints = nil,
     PathIndex = 1,
+    PathTargetPos = nil,
+    PathGoalType = nil,   -- "approach" / "retreat"
+    PathRequestTime = 0,
+    PathBusy = false,
 }
 
 setStatus = function() end
@@ -161,33 +165,36 @@ local function isFacingEnemy(enemyPos)
     return dot >= CONFIG.FacingThreshold
 end
 
--- ============ PATHFINDER (NON-BLOCKING + SKIP WAYPOINT) ⭐ ============
-local function pathMoveTo(targetPos)
+-- ============ PATH RESET ============
+local function resetPath()
+    State.PathWaypoints = nil
+    State.PathIndex = 1
+    State.PathTargetPos = nil
+    State.PathGoalType = nil
+end
+
+-- ============ REQUEST PATH (sekali compute, no spam) ============
+local function requestPath(targetPos, goalType)
     if not State.Humanoid or not State.RootPart then return end
     if not targetPos then return end
-    
-    -- ⭐ kalau masih ada path valid, follow dulu
-    if State.PathWaypoints and State.PathIndex <= #State.PathWaypoints then
-        local myPos = State.RootPart.Position
-        local wp = State.PathWaypoints[State.PathIndex]
-        local distToWp = (myPos - wp.Position).Magnitude
-        
-        if distToWp <= CONFIG.WaypointReached then
-            State.PathIndex = State.PathIndex + 1
-            if State.PathIndex <= #State.PathWaypoints then
-                State.Humanoid:MoveTo(State.PathWaypoints[State.PathIndex].Position)
-            end
-        else
-            -- pastiin MoveTo masih aktif
-            State.Humanoid:MoveTo(wp.Position)
-        end
-        return
-    end
-    
-    -- kalau lagi compute, skip
     if State.PathBusy then return end
     
-    -- ⭐ compute di BACKGROUND (non-blocking)
+    -- kapan perlu recompute?
+    local needRecompute = false
+    
+    if not State.PathWaypoints then 
+        needRecompute = true 
+    elseif State.PathGoalType ~= goalType then
+        needRecompute = true
+    elseif State.PathIndex > #State.PathWaypoints then
+        needRecompute = true
+    elseif State.PathTargetPos and (targetPos - State.PathTargetPos).Magnitude > CONFIG.TargetMoveThreshold then
+        needRecompute = true
+    end
+    
+    if not needRecompute then return end
+    
+    -- compute di background (non-blocking)
     State.PathBusy = true
     task.spawn(function()
         local myPos = State.RootPart.Position
@@ -195,30 +202,58 @@ local function pathMoveTo(targetPos)
             AgentRadius = 3, AgentHeight = 5, AgentCanJump = true,
             AgentJumpHeight = 10, AgentMaxSlope = 45,
         })
-        
         local ok = pcall(function() path:ComputeAsync(myPos, targetPos) end)
         
         if ok and path.Status == Enum.PathStatus.Success then
-            local wps = path:GetWaypoints()
-            if #wps >= 2 then
-                -- ⭐ SKIP beberapa waypoint biar lompat jauh
-                local startIdx = math.min(2 + CONFIG.WaypointSkip, #wps)
-                State.PathWaypoints = wps
-                State.PathIndex = startIdx
-                State.Humanoid:MoveTo(wps[startIdx].Position)
-            end
+            State.PathWaypoints = path:GetWaypoints()
+            State.PathIndex = 2  -- mulai dari wp ke-2
+            State.PathTargetPos = targetPos
+            State.PathGoalType = goalType
         else
-            -- fallback
-            State.Humanoid:MoveTo(targetPos)
+            State.PathWaypoints = nil
+            State.PathTargetPos = targetPos
+            State.PathGoalType = goalType
         end
-        
         State.PathBusy = false
     end)
 end
 
-local function resetPath()
-    State.PathWaypoints = nil
-    State.PathIndex = 1
+-- ============ FOLLOW PATH (per-frame, smooth) ⭐ ============
+local function followPath()
+    if not State.Humanoid or not State.RootPart then return end
+    if not State.PathWaypoints then
+        -- fallback: langsung ke target
+        if State.PathTargetPos then
+            State.Humanoid:MoveTo(State.PathTargetPos)
+        end
+        return
+    end
+    
+    if State.PathIndex > #State.PathWaypoints then
+        return  -- path habis, nunggu recompute
+    end
+    
+    local myPos = State.RootPart.Position
+    local wp = State.PathWaypoints[State.PathIndex]
+    local distToWp = (myPos - wp.Position).Magnitude
+    
+    if distToWp <= CONFIG.WaypointReached then
+        -- advance ke waypoint berikutnya
+        State.PathIndex = State.PathIndex + 1
+        if State.PathIndex <= #State.PathWaypoints then
+            local nextWp = State.PathWaypoints[State.PathIndex]
+            State.Humanoid:MoveTo(nextWp.Position)
+            if nextWp.Action == Enum.PathWaypointAction.Jump then
+                State.Humanoid.Jump = true
+            end
+        end
+    else
+        -- pastiin masih gerak ke waypoint ini
+        State.Humanoid:MoveTo(wp.Position)
+        if wp.Action == Enum.PathWaypointAction.Jump then
+            State.Humanoid.Jump = true
+        end
+    end
 end
 
 -- ============ CARI TITIK AMAN DI SEKITAR ENEMY ============
@@ -278,10 +313,10 @@ local function mainLoop()
                 if dist < CONFIG.KeepDistance then
                     -- RETREAT
                     setStatus(string.format("Retreating (%.1f) | %d%s", dist, count, roomStr))
-                    resetPath()
                     local safePoint = findSafePointAroundEnemy(enemyPos, myPos)
                     if safePoint then
-                        pathMoveTo(safePoint)
+                        requestPath(safePoint, "retreat")
+                        followPath()
                     end
                 else
                     -- MAJU + FACING + ATTACK
@@ -290,7 +325,8 @@ local function mainLoop()
                     
                     if dirToEnemy.Magnitude > 0.5 then
                         local stepPos = myPos + dirToEnemy.Unit * CONFIG.StepForward
-                        pathMoveTo(stepPos)
+                        requestPath(stepPos, "approach")
+                        followPath()
                         task.wait(0.03)
                     end
                     
@@ -543,8 +579,8 @@ local function createUI()
     createInput("Attack Cooldown", CONFIG.AttackCooldown, 2, function(v) CONFIG.AttackCooldown = v end)
     createInput("Facing Threshold", CONFIG.FacingThreshold, 3, function(v) CONFIG.FacingThreshold = v end)
     createInput("Step Forward", CONFIG.StepForward, 4, function(v) CONFIG.StepForward = v end)
-    createInput("Waypoint Skip", CONFIG.WaypointSkip, 5, function(v) CONFIG.WaypointSkip = v end)
-    createInput("Waypoint Reached", CONFIG.WaypointReached, 6, function(v) CONFIG.WaypointReached = v end)
+    createInput("Waypoint Reached", CONFIG.WaypointReached, 5, function(v) CONFIG.WaypointReached = v end)
+    createInput("Target Move Threshold", CONFIG.TargetMoveThreshold, 6, function(v) CONFIG.TargetMoveThreshold = v end)
     createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 7, function(v) CONFIG.AutoUpgrade = v end)
 
     local startBtn = Instance.new("TextButton")
@@ -565,7 +601,7 @@ local function createUI()
     local footer = Instance.new("TextLabel")
     footer.Size = UDim2.new(1, 0, 0, 20)
     footer.BackgroundTransparency = 1
-    footer.Text = "v36 - fast pathfinder"
+    footer.Text = "v37 - smooth follow"
     footer.TextColor3 = Color3.fromRGB(120, 120, 130)
     footer.TextSize = 11
     footer.Font = Enum.Font.Gotham
@@ -606,4 +642,4 @@ local function createUI()
 end
 
 createUI()
-print("[AutoFarm Mobile v36] Loaded - fast pathfinder")
+print("[AutoFarm Mobile v37] Loaded - smooth follow")
