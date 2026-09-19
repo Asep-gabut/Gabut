@@ -18,7 +18,7 @@ local CONFIG = {
     AttackCooldown = 0.5,
     AutoUpgrade = true,
     WaypointReached = 4,
-    TargetMoveThreshold = 10,
+    TargetMoveThreshold = 6,
 }
 
 local State = {
