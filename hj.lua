@@ -1,6 +1,6 @@
 -- ============================================
--- AUTO FARM DUNGEON - MOBILE EDITION (v30)
--- Keep distance simple: mundur ke titik jarak ideal
+-- AUTO FARM DUNGEON - MOBILE EDITION (v34)
+-- Beneran tanpa throttle/cache - compute tiap loop
 -- ============================================
 
 local Players = game:GetService("Players")
@@ -11,7 +11,7 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 
 local CONFIG = {
-    KeepDistance = 60,
+    KeepDistance = 50,
     Tolerance = 2,
     AttackCooldown = 0.5,
     AutoUpgrade = true,
@@ -21,8 +21,6 @@ local State = {
     Running = false, Character = nil, Humanoid = nil, RootPart = nil,
     LastAttack = 0, LastUpgrade = 0,
     EnemyFolders = {}, LastFolderScan = 0,
-    PathWaypoints = nil, PathIndex = 1, PathEnemyRef = nil,
-    PathTargetPos = nil,
 }
 
 setStatus = function() end
@@ -139,18 +137,13 @@ local function findNearestEnemy()
     return nearest, totalCount, roomInfo
 end
 
-local function resetPath()
-    State.PathWaypoints = nil
-    State.PathIndex = 1
-    State.PathEnemyRef = nil
-    State.PathTargetPos = nil
-end
-
--- ============ PATHFINDER KE POSISI ============
+-- ============ PATHFINDER (compute tiap panggil, no cache) ⭐ ============
 local function pathMoveTo(targetPos)
     if not State.Humanoid or not State.RootPart then return end
+    if not targetPos then return end
     local myPos = State.RootPart.Position
     
+    -- compute path baru
     local path = PathfindingService:CreatePath({
         AgentRadius = 3, AgentHeight = 5, AgentCanJump = true,
         AgentJumpHeight = 10, AgentMaxSlope = 45,
@@ -163,7 +156,30 @@ local function pathMoveTo(targetPos)
             return
         end
     end
+    -- fallback
     State.Humanoid:MoveTo(targetPos)
+end
+
+-- ============ CARI TITIK AMAN DI SEKITAR ENEMY ============
+local function findSafePointAroundEnemy(enemyPos, myPos)
+    local bestPoint = nil
+    local bestDist = math.huge
+    local samples = 16
+    for i = 0, samples - 1 do
+        local angle = (i / samples) * math.pi * 2
+        local offset = Vector3.new(math.cos(angle), 0, math.sin(angle))
+        local point = Vector3.new(
+            enemyPos.X + offset.X * CONFIG.KeepDistance,
+            myPos.Y,
+            enemyPos.Z + offset.Z * CONFIG.KeepDistance
+        )
+        local d = (point - myPos).Magnitude
+        if d < bestDist then
+            bestDist = d
+            bestPoint = point
+        end
+    end
+    return bestPoint
 end
 
 -- ============ ATTACK ============
@@ -201,34 +217,26 @@ local function mainLoop()
                 local highBound = CONFIG.KeepDistance + CONFIG.Tolerance
 
                 if dist > highBound then
-                    -- ⬆️ JAUH: maju sambil attack
+                    -- MAJU sambil attack
                     setStatus(string.format("Approaching (%.1f) | %d%s", dist, count, roomStr))
                     pathMoveTo(enemyPos)
                     attackEnemy(enemy)
                     
                 elseif dist < lowBound then
-                    -- ⬇️ DEKET: mundur ke titik jarak ideal
+                    -- RETREAT ke titik aman
                     setStatus(string.format("Retreating (%.1f) | %d%s", dist, count, roomStr))
-                    
-                    -- hitung arah menjauh (horizontal)
-                    local awayDir = myPos - enemyPos
-                    awayDir = Vector3.new(awayDir.X, 0, awayDir.Z)
-                    if awayDir.Magnitude > 0.1 then
-                        awayDir = awayDir.Unit
-                        -- target = posisi enemy + arah menjauh * KeepDistance
-                        -- jadi karakter bakal mundur SAMPAI jarak pas KeepDistance
-                        local retreatPos = enemyPos + awayDir * CONFIG.KeepDistance
-                        pathMoveTo(retreatPos)
+                    local safePoint = findSafePointAroundEnemy(enemyPos, myPos)
+                    if safePoint then
+                        pathMoveTo(safePoint)
                     end
                     
                 else
-                    -- ✅ PAS: diam + attack
+                    -- DIAM + ATTACK
                     setStatus(string.format("Attacking (%.1f) | %d%s", dist, count, roomStr))
                     attackEnemy(enemy)
                 end
             end
         else
-            resetPath()
             setStatus(string.format("No enemy | %d rooms", #State.EnemyFolders))
         end
     end
@@ -484,7 +492,7 @@ local function createUI()
     local footer = Instance.new("TextLabel")
     footer.Size = UDim2.new(1, 0, 0, 20)
     footer.BackgroundTransparency = 1
-    footer.Text = "v30 - keep distance clean"
+    footer.Text = "v34 - no throttle at all"
     footer.TextColor3 = Color3.fromRGB(120, 120, 130)
     footer.TextSize = 11
     footer.Font = Enum.Font.Gotham
@@ -504,7 +512,6 @@ local function createUI()
             floatBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
             soStroke.Color = Color3.fromRGB(100, 200, 100)
             setStatus("Idle")
-            resetPath()
         else
             State.Running = true
             startBtn.Text = "■  STOP FARM"
@@ -525,4 +532,4 @@ local function createUI()
 end
 
 createUI()
-print("[AutoFarm Mobile v30] Loaded")
+print("[AutoFarm Mobile v34] Loaded - no throttle")
