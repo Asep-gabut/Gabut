@@ -1,6 +1,6 @@
 -- ============================================
--- AUTO FARM DUNGEON - MOBILE EDITION (v13)
--- Multi-room support
+-- AUTO FARM DUNGEON - MOBILE EDITION (v14)
+-- No face enemy + Status overlay + Settings-only GUI
 -- ============================================
 
 local Players = game:GetService("Players")
@@ -8,7 +8,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local PathfindingService = game:GetService("PathfindingService")
 local UserInputService = game:GetService("UserInputService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
 local TweenService = game:GetService("TweenService")
 local CoreGui = game:GetService("CoreGui")
 
@@ -26,10 +25,9 @@ local CONFIG = {
     AutoUpgrade = true,
     UpgradeInterval = 3,
     UseShiftlock = true,
-    UseTouchToFace = true,
     StuckTimeout = 1.0,
     PathRecomputeDelay = 0.3,
-    FolderScanInterval = 2,  -- scan semua room tiap 2 detik
+    FolderScanInterval = 2,
 }
 
 local State = {
@@ -42,7 +40,7 @@ local State = {
     LastPathCompute = 0,
     LastPos = nil,
     StuckTime = 0,
-    EnemyFolders = {},       -- ⭐ list semua enemyFolder
+    EnemyFolders = {},
     LastFolderScan = 0,
     CurrentEnemy = nil,
     ShiftlockSaved = nil,
@@ -87,17 +85,13 @@ LocalPlayer.CharacterAdded:Connect(setupCharacter)
 -- ============ WALKSPEED ============
 local function applyWalkSpeed()
     if State.Humanoid then
-        pcall(function()
-            State.Humanoid.WalkSpeed = CONFIG.WalkSpeed
-        end)
+        pcall(function() State.Humanoid.WalkSpeed = CONFIG.WalkSpeed end)
     end
 end
 
 local function restoreWalkSpeed()
     if State.Humanoid and State.WalkSpeedSaved then
-        pcall(function()
-            State.Humanoid.WalkSpeed = State.WalkSpeedSaved
-        end)
+        pcall(function() State.Humanoid.WalkSpeed = State.WalkSpeedSaved end)
     end
 end
 
@@ -108,8 +102,7 @@ local function setShiftlock(enabled)
         if not sl then
             for _, obj in ipairs(LocalPlayer:GetDescendants()) do
                 if obj.Name:lower():find("shiftlock") then
-                    sl = obj
-                    break
+                    sl = obj break
                 end
             end
         end
@@ -154,8 +147,7 @@ local function upgradeSpell()
     end
 end
 
--- ============ ENEMY FOLDER SCANNER (MULTI-ROOM) ⭐ ============
--- Scan SEMUA folder bernama "enemyFolder" di workspace
+-- ============ ENEMY FOLDER SCANNER ============
 local function scanAllEnemyFolders()
     local folders = {}
     for _, obj in ipairs(workspace:GetDescendants()) do
@@ -169,7 +161,6 @@ end
 
 local function getEnemyFolders(force)
     local now = tick()
-    -- rescan kalau belum pernah, force, atau udah lewat interval
     if force 
         or #State.EnemyFolders == 0 
         or (now - State.LastFolderScan) >= CONFIG.FolderScanInterval then
@@ -209,11 +200,10 @@ local function getHumanoidAndHRP(enemy)
     return hum, hrp
 end
 
--- ============ FIND ENEMY DI SEMUA ROOM ⭐ ============
 local function findNearestEnemy()
     local folders = getEnemyFolders(false)
     if #folders == 0 then
-        setStatus("No enemyFolder found")
+        setStatus("No enemyFolder")
         return nil, 0, nil
     end
     if not State.RootPart then return nil, 0, nil end
@@ -250,65 +240,10 @@ local function findNearestEnemy()
         end
     end
     
-    -- simpan folder tempat enemy berada
     State.CurrentRoom = nearestFolder
-    
-    -- kalau 0 enemy, force rescan next loop
-    if totalCount == 0 then
-        State.LastFolderScan = 0
-    end
+    if totalCount == 0 then State.LastFolderScan = 0 end
     
     return nearest, totalCount, roomInfo
-end
-
--- ============ FACE ENEMY (SendTouchEvent) ============
-local function touchFacing(enemy)
-    if not CONFIG.UseTouchToFace then return false end
-    if not enemy or not Camera then return false end
-    
-    local _, hrp = getHumanoidAndHRP(enemy)
-    if not hrp then return false end
-    
-    local screenPos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
-    if not onScreen then return false end
-    
-    local tapX = math.floor(screenPos.X)
-    local tapY = math.floor(screenPos.Y)
-    
-    local ok = pcall(function()
-        VirtualInputManager:SendTouchEvent(tapX, tapY, Enum.UserInputState.Begin, false, game)
-        task.wait(0.02)
-        VirtualInputManager:SendTouchEvent(tapX, tapY, Enum.UserInputState.End, false, game)
-    end)
-    
-    if not ok then
-        pcall(function()
-            VirtualInputManager:SendMouseButtonEvent(tapX, tapY, 0, true, game, 0)
-            task.wait(0.02)
-            VirtualInputManager:SendMouseButtonEvent(tapX, tapY, 0, false, game, 0)
-        end)
-    end
-    
-    return true
-end
-
-local function faceEnemyCFrame(enemy)
-    if not enemy or not State.RootPart then return end
-    local _, hrp = getHumanoidAndHRP(enemy)
-    if not hrp then return end
-    local myPos = State.RootPart.Position
-    local targetPos = Vector3.new(hrp.Position.X, myPos.Y, hrp.Position.Z)
-    State.RootPart.CFrame = CFrame.lookAt(myPos, targetPos)
-end
-
-local function faceEnemy(enemy)
-    local ok = false
-    if CONFIG.UseTouchToFace then
-        ok = touchFacing(enemy)
-    end
-    if not ok then
-        faceEnemyCFrame(enemy)
-    end
 end
 
 -- ============ ANTI-STUCK ============
@@ -333,9 +268,7 @@ local function unstick()
     task.wait(0.05)
     local myPos = State.RootPart.Position
     local offset = Vector3.new(
-        (math.random() - 0.5) * 8,
-        0,
-        (math.random() - 0.5) * 8
+        (math.random() - 0.5) * 8, 0, (math.random() - 0.5) * 8
     )
     State.Humanoid:MoveTo(myPos + offset)
     State.StuckTime = 0
@@ -387,9 +320,7 @@ local function walkToEnemy(enemy)
     end
     
     local now = tick()
-    if now - State.LastPathCompute < CONFIG.PathRecomputeDelay then
-        return
-    end
+    if now - State.LastPathCompute < CONFIG.PathRecomputeDelay then return end
     State.LastPathCompute = now
     
     local myPos = State.RootPart.Position
@@ -417,13 +348,13 @@ local function walkToEnemy(enemy)
     end
 end
 
--- ============ ATTACK ============
+-- ============ ATTACK (NO FACE ENEMY) ============
 local function attackEnemy(enemy)
     local now = tick()
     if now - State.LastAttack < CONFIG.AttackCooldown then return end
     State.LastAttack = now
 
-    faceEnemy(enemy)
+    -- cuma press Q + E, gak ada face / touch / camera lock
     pressQ()
     task.wait(0.08)
     pressE()
@@ -444,17 +375,14 @@ local function mainLoop()
             continue
         end
 
-        -- walkspeed reapply
         if CONFIG.WalkSpeed ~= 16 and State.Humanoid.WalkSpeed ~= CONFIG.WalkSpeed then
             applyWalkSpeed()
         end
 
-        -- auto upgrade
         if CONFIG.AutoUpgrade and (tick() - State.LastUpgrade) >= CONFIG.UpgradeInterval then
             upgradeSpell()
         end
 
-        -- find enemy di SEMUA room
         local enemy, count, roomInfo = findNearestEnemy()
         State.CurrentEnemy = enemy
 
@@ -471,7 +399,6 @@ local function mainLoop()
                 local dist = (ehrp.Position - State.RootPart.Position).Magnitude
                 local kiteThreshold = CONFIG.KeepDistance - CONFIG.DistanceTolerance
                 
-                -- room info string
                 local roomStr = ""
                 if roomInfo and #roomInfo > 0 then
                     roomStr = " [" .. table.concat(roomInfo, ", ") .. "]"
@@ -492,7 +419,7 @@ local function mainLoop()
         else
             State.CurrentEnemy = nil
             State.StuckTime = 0
-            setStatus(string.format("No enemy | %d rooms scanned", #State.EnemyFolders))
+            setStatus(string.format("No enemy | %d rooms", #State.EnemyFolders))
         end
     end
     
@@ -501,7 +428,7 @@ local function mainLoop()
 end
 
 -- ============================================
---              MOBILE UI
+--      UI: STATUS OVERLAY + SETTINGS PANEL
 -- ============================================
 local function createUI()
     if CoreGui:FindFirstChild("AutoFarmUI") then
@@ -515,18 +442,52 @@ local function createUI()
     screenGui.IgnoreGuiInset = true
     screenGui.Parent = CoreGui
 
+    -- ============ STATUS OVERLAY (selalu keliatan) ============
+    local statusOverlay = Instance.new("TextLabel")
+    statusOverlay.Name = "StatusOverlay"
+    statusOverlay.Size = UDim2.new(0, 400, 0, 32)
+    statusOverlay.Position = UDim2.new(0.5, -200, 0, 10)
+    statusOverlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    statusOverlay.BackgroundTransparency = 0.4
+    statusOverlay.Text = "⚔ Idle"
+    statusOverlay.TextColor3 = Color3.fromRGB(180, 255, 180)
+    statusOverlay.TextSize = 16
+    statusOverlay.Font = Enum.Font.GothamBold
+    statusOverlay.TextStrokeTransparency = 0.5
+    statusOverlay.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    statusOverlay.ZIndex = 5
+    statusOverlay.Parent = screenGui
+
+    local soCorner = Instance.new("UICorner")
+    soCorner.CornerRadius = UDim.new(0, 8)
+    soCorner.Parent = statusOverlay
+
+    local soStroke = Instance.new("UIStroke")
+    soStroke.Color = Color3.fromRGB(100, 200, 100)
+    soStroke.Thickness = 1.5
+    soStroke.Transparency = 0.3
+    soStroke.Parent = statusOverlay
+
+    setStatus = function(msg)
+        pcall(function()
+            statusOverlay.Text = "⚔ " .. msg
+        end)
+    end
+
+    -- ============ FLOATING BUTTON (buat buka settings) ============
     local floatBtn = Instance.new("TextButton")
     floatBtn.Name = "FloatBtn"
-    floatBtn.Size = UDim2.new(0, 60, 0, 60)
-    floatBtn.Position = UDim2.new(0, 15, 0.5, -30)
+    floatBtn.Size = UDim2.new(0, 55, 0, 55)
+    floatBtn.Position = UDim2.new(0, 15, 0.5, -27)
     floatBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
-    floatBtn.Text = "⚔"
+    floatBtn.Text = "⚙"
     floatBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    floatBtn.TextSize = 26
+    floatBtn.TextSize = 24
     floatBtn.Font = Enum.Font.GothamBold
     floatBtn.BorderSizePixel = 0
     floatBtn.Active = true
     floatBtn.Draggable = true
+    floatBtn.ZIndex = 5
     floatBtn.Parent = screenGui
 
     local fbCorner = Instance.new("UICorner")
@@ -536,17 +497,20 @@ local function createUI()
     local fbStroke = Instance.new("UIStroke")
     fbStroke.Color = Color3.fromRGB(255, 255, 255)
     fbStroke.Thickness = 2
+    fbStroke.Transparency = 0.3
     fbStroke.Parent = floatBtn
 
+    -- ============ SETTINGS PANEL ============
     local main = Instance.new("Frame")
-    main.Name = "Main"
-    main.Size = UDim2.new(0, 300, 0, 580)
-    main.Position = UDim2.new(0.5, -150, 0.5, -290)
+    main.Name = "SettingsPanel"
+    main.Size = UDim2.new(0, 300, 0, 560)
+    main.Position = UDim2.new(0.5, -150, 0.5, -280)
     main.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
     main.BorderSizePixel = 0
     main.Active = true
     main.Draggable = true
     main.Visible = false
+    main.ZIndex = 10
     main.Parent = screenGui
 
     local mainCorner = Instance.new("UICorner")
@@ -558,10 +522,12 @@ local function createUI()
     mainStroke.Thickness = 2
     mainStroke.Parent = main
 
+    -- TITLE BAR
     local title = Instance.new("Frame")
     title.Size = UDim2.new(1, 0, 0, 45)
     title.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
     title.BorderSizePixel = 0
+    title.ZIndex = 11
     title.Parent = main
 
     local titleCorner = Instance.new("UICorner")
@@ -573,17 +539,19 @@ local function createUI()
     titleFix.Position = UDim2.new(0, 0, 1, -15)
     titleFix.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
     titleFix.BorderSizePixel = 0
+    titleFix.ZIndex = 11
     titleFix.Parent = title
 
     local titleText = Instance.new("TextLabel")
     titleText.Size = UDim2.new(1, -100, 1, 0)
     titleText.Position = UDim2.new(0, 15, 0, 0)
     titleText.BackgroundTransparency = 1
-    titleText.Text = "⚔ AUTO FARM v13"
+    titleText.Text = "⚙ SETTINGS"
     titleText.TextColor3 = Color3.fromRGB(200, 220, 255)
     titleText.TextSize = 17
     titleText.Font = Enum.Font.GothamBold
     titleText.TextXAlignment = Enum.TextXAlignment.Left
+    titleText.ZIndex = 12
     titleText.Parent = title
 
     local closeBtn = Instance.new("TextButton")
@@ -595,6 +563,7 @@ local function createUI()
     closeBtn.TextSize = 18
     closeBtn.Font = Enum.Font.GothamBold
     closeBtn.BorderSizePixel = 0
+    closeBtn.ZIndex = 12
     closeBtn.Parent = title
 
     local closeCorner = Instance.new("UICorner")
@@ -603,9 +572,9 @@ local function createUI()
 
     closeBtn.MouseButton1Click:Connect(function()
         main.Visible = false
-        floatBtn.Visible = true
     end)
 
+    -- SCROLL
     local scroll = Instance.new("ScrollingFrame")
     scroll.Size = UDim2.new(1, -20, 1, -60)
     scroll.Position = UDim2.new(0, 10, 0, 50)
@@ -615,6 +584,7 @@ local function createUI()
     scroll.ScrollBarImageColor3 = Color3.fromRGB(80, 120, 255)
     scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
     scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    scroll.ZIndex = 11
     scroll.Parent = main
 
     local layout = Instance.new("UIListLayout")
@@ -628,6 +598,7 @@ local function createUI()
         row.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
         row.BorderSizePixel = 0
         row.LayoutOrder = order
+        row.ZIndex = 11
         row.Parent = scroll
 
         local rowCorner = Instance.new("UICorner")
@@ -643,6 +614,7 @@ local function createUI()
         lbl.TextSize = 14
         lbl.Font = Enum.Font.GothamMedium
         lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.ZIndex = 12
         lbl.Parent = row
 
         local box = Instance.new("TextBox")
@@ -655,6 +627,7 @@ local function createUI()
         box.Font = Enum.Font.Gotham
         box.BorderSizePixel = 0
         box.ClearTextOnFocus = false
+        box.ZIndex = 12
         box.Parent = row
 
         local boxCorner = Instance.new("UICorner")
@@ -673,6 +646,7 @@ local function createUI()
         row.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
         row.BorderSizePixel = 0
         row.LayoutOrder = order
+        row.ZIndex = 11
         row.Parent = scroll
 
         local rowCorner = Instance.new("UICorner")
@@ -688,6 +662,7 @@ local function createUI()
         lbl.TextSize = 14
         lbl.Font = Enum.Font.GothamMedium
         lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.ZIndex = 12
         lbl.Parent = row
 
         local btn = Instance.new("TextButton")
@@ -699,6 +674,7 @@ local function createUI()
         btn.TextSize = 13
         btn.Font = Enum.Font.GothamBold
         btn.BorderSizePixel = 0
+        btn.ZIndex = 12
         btn.Parent = row
 
         local btnCorner = Instance.new("UICorner")
@@ -731,7 +707,6 @@ local function createUI()
         CONFIG.UseShiftlock = v
         if v then enableShiftlock() else restoreShiftlock() end
     end)
-    createToggle("Touch Face", CONFIG.UseTouchToFace, 12, function(v) CONFIG.UseTouchToFace = v end)
 
     local startBtn = Instance.new("TextButton")
     startBtn.Size = UDim2.new(1, 0, 0, 55)
@@ -741,56 +716,39 @@ local function createUI()
     startBtn.TextSize = 17
     startBtn.Font = Enum.Font.GothamBold
     startBtn.BorderSizePixel = 0
-    startBtn.LayoutOrder = 13
+    startBtn.LayoutOrder = 12
+    startBtn.ZIndex = 11
     startBtn.Parent = scroll
 
     local startCorner = Instance.new("UICorner")
     startCorner.CornerRadius = UDim.new(0, 10)
     startCorner.Parent = startBtn
 
-    local statusLbl = Instance.new("TextLabel")
-    statusLbl.Size = UDim2.new(1, 0, 0, 40)
-    statusLbl.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
-    statusLbl.Text = "Status: Idle"
-    statusLbl.TextColor3 = Color3.fromRGB(180, 220, 180)
-    statusLbl.TextSize = 13
-    statusLbl.Font = Enum.Font.GothamMedium
-    statusLbl.BorderSizePixel = 0
-    statusLbl.LayoutOrder = 14
-    statusLbl.Parent = scroll
-
-    local statusCorner = Instance.new("UICorner")
-    statusCorner.CornerRadius = UDim.new(0, 8)
-    statusCorner.Parent = statusLbl
-
     local footer = Instance.new("TextLabel")
     footer.Size = UDim2.new(1, 0, 0, 20)
     footer.BackgroundTransparency = 1
-    footer.Text = "Multi-room v13"
+    footer.Text = "Multi-room v14 | No face"
     footer.TextColor3 = Color3.fromRGB(120, 120, 130)
     footer.TextSize = 11
     footer.Font = Enum.Font.Gotham
-    footer.LayoutOrder = 15
+    footer.LayoutOrder = 13
+    footer.ZIndex = 11
     footer.Parent = scroll
 
-    setStatus = function(msg)
-        pcall(function()
-            statusLbl.Text = "Status: " .. msg
-        end)
-    end
-
+    -- FLOAT BTN click → toggle panel
     floatBtn.MouseButton1Click:Connect(function()
         main.Visible = not main.Visible
-        floatBtn.Visible = false
     end)
 
+    -- START/STOP
     startBtn.MouseButton1Click:Connect(function()
         if State.Running then
             State.Running = false
             startBtn.Text = "▶  START FARM"
             startBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
             floatBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
-            setStatus("Stopped")
+            soStroke.Color = Color3.fromRGB(100, 200, 100)
+            setStatus("Idle")
             if CONFIG.UseShiftlock then restoreShiftlock() end
             restoreWalkSpeed()
         else
@@ -798,6 +756,7 @@ local function createUI()
             startBtn.Text = "■  STOP FARM"
             startBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
             floatBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+            soStroke.Color = Color3.fromRGB(255, 100, 100)
             setStatus("Starting...")
 
             task.spawn(function()
@@ -815,9 +774,9 @@ local function createUI()
         end
     end)
 
-    setStatus("Tap ⚔ untuk buka")
+    setStatus("Idle - tap ⚙")
 end
 
 -- ============ INIT ============
 createUI()
-print("[AutoFarm Mobile v13] Loaded - multi-room support")
+print("[AutoFarm Mobile v14] Loaded - status overlay + settings panel")
