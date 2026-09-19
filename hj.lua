@@ -1,6 +1,6 @@
 -- ============================================
--- AUTO FARM DUNGEON - MOBILE EDITION (v23)
--- Base = v18 + AO face (minimal change)
+-- AUTO FARM DUNGEON - MOBILE EDITION (v24)
+-- v18 base - no AO, kite pakai Move() mundur
 -- ============================================
 
 local Players = game:GetService("Players")
@@ -16,10 +16,7 @@ local CONFIG = {
     KeepDistance = 30,
     AttackCooldown = 0.5,
     AutoUpgrade = true,
-    UseShiftlock = false,
     KiteSpeed = 1.2,
-    UseAO = true,              -- toggle AO face
-    FaceSmoothness = 30,
 }
 
 local State = {
@@ -37,8 +34,6 @@ local State = {
     PathTargetPos = nil,
     LastMoveToPos = nil,
     LastZone = nil,
-    Orientation = nil,
-    OrientationAttach = nil,
 }
 
 setStatus = function() end
@@ -59,59 +54,11 @@ local function pressE()
     pcall(function() keyrelease(KEY_E) end)
 end
 
--- ============ AO SETUP ============
-local function setupOrientation()
-    if not CONFIG.UseAO then return end
-    if not State.RootPart then return end
-    
-    if State.Orientation then State.Orientation:Destroy() end
-    if State.OrientationAttach then State.OrientationAttach:Destroy() end
-    
-    if State.Humanoid then State.Humanoid.AutoRotate = false end
-    
-    local attach = Instance.new("Attachment")
-    attach.Name = "FarmFaceAttach"
-    attach.Parent = State.RootPart
-    State.OrientationAttach = attach
-    
-    local ao = Instance.new("AlignOrientation")
-    ao.Name = "FarmFaceAO"
-    ao.Attachment0 = attach
-    ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
-    ao.MaxTorque = 100000
-    ao.MaxAngularVelocity = 100000
-    ao.Responsiveness = CONFIG.FaceSmoothness
-    ao.Parent = State.RootPart
-    State.Orientation = ao
-end
-
-local function cleanupOrientation()
-    pcall(function()
-        if State.Orientation then State.Orientation:Destroy() end
-        if State.OrientationAttach then State.OrientationAttach:Destroy() end
-        State.Orientation = nil
-        State.OrientationAttach = nil
-        if State.Humanoid then State.Humanoid.AutoRotate = true end
-    end)
-end
-
-local function faceTarget(enemy)
-    if not CONFIG.UseAO then return end
-    if not State.Orientation or not State.RootPart then return end
-    local _, hrp = getHumanoidAndHRP(enemy)
-    if not hrp then return end
-    local myPos = State.RootPart.Position
-    local targetPos = Vector3.new(hrp.Position.X, myPos.Y, hrp.Position.Z)
-    State.Orientation.CFrame = CFrame.lookAt(myPos, targetPos)
-end
-
 -- ============ CHARACTER ============
 local function setupCharacter(char)
     State.Character = char
     State.Humanoid = char:WaitForChild("Humanoid")
     State.RootPart = char:WaitForChild("HumanoidRootPart")
-    task.wait(0.5)
-    setupOrientation()
 end
 
 if LocalPlayer.Character then setupCharacter(LocalPlayer.Character) end
@@ -157,6 +104,7 @@ local function getEnemyFolders()
     return State.EnemyFolders
 end
 
+-- ============ HUMANOID ============
 local function getHumanoidAndHRP(enemy)
     if not enemy or not enemy.Parent then return nil, nil end
     local hum = enemy:FindFirstChildOfClass("Humanoid") 
@@ -221,7 +169,7 @@ local function resetPath()
     State.LastMoveToPos = nil
 end
 
--- ============ KITING ============
+-- ============ KITING (MOVE MUNDUR, KAYA v18) ⭐ ============
 local function kiteAway(enemy)
     if not State.Humanoid or not State.RootPart then return end
     local _, hrp = getHumanoidAndHRP(enemy)
@@ -231,8 +179,10 @@ local function kiteAway(enemy)
     local awayDir = myPos - hrp.Position
     awayDir = Vector3.new(awayDir.X, 0, awayDir.Z)
     if awayDir.Magnitude < 0.1 then return end
+    awayDir = awayDir.Unit
     
-    State.Humanoid:Move(awayDir.Unit * CONFIG.KiteSpeed)
+    -- gerak mundur tanpa rotate karakter
+    State.Humanoid:Move(awayDir * CONFIG.KiteSpeed)
 end
 
 -- ============ WALK (kaya v18) ============
@@ -321,10 +271,6 @@ local function mainLoop()
         end
         if State.Humanoid.Health <= 0 then task.wait(1) continue end
 
-        if CONFIG.UseAO and (not State.Orientation or not State.Orientation.Parent) then
-            setupOrientation()
-        end
-
         if CONFIG.AutoUpgrade and (tick() - State.LastUpgrade) >= 3 then
             upgradeSpell()
         end
@@ -332,8 +278,6 @@ local function mainLoop()
         local enemy, count, roomInfo = findNearestEnemy()
 
         if enemy then
-            if CONFIG.UseAO then faceTarget(enemy) end
-            
             local _, ehrp = getHumanoidAndHRP(enemy)
             if ehrp then
                 local dist = (ehrp.Position - State.RootPart.Position).Magnitude
@@ -387,7 +331,7 @@ local function mainLoop()
 end
 
 -- ============================================
---      UI (sama kaya v18 + toggle AO)
+--      UI
 -- ============================================
 local function createUI()
     if CoreGui:FindFirstChild("AutoFarmUI") then CoreGui.AutoFarmUI:Destroy() end
@@ -447,8 +391,8 @@ local function createUI()
     fbStroke.Parent = floatBtn
 
     local main = Instance.new("Frame")
-    main.Size = UDim2.new(0, 300, 0, 540)
-    main.Position = UDim2.new(0.5, -150, 0.5, -270)
+    main.Size = UDim2.new(0, 300, 0, 500)
+    main.Position = UDim2.new(0.5, -150, 0.5, -250)
     main.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
     main.BorderSizePixel = 0
     main.Active = true
@@ -617,15 +561,7 @@ local function createUI()
     createInput("Keep Distance", CONFIG.KeepDistance, 2, function(v) CONFIG.KeepDistance = v end)
     createInput("Attack Cooldown", CONFIG.AttackCooldown, 3, function(v) CONFIG.AttackCooldown = v end)
     createInput("Kite Speed", CONFIG.KiteSpeed, 4, function(v) CONFIG.KiteSpeed = v end)
-    createInput("Face Smoothness", CONFIG.FaceSmoothness, 5, function(v) 
-        CONFIG.FaceSmoothness = v
-        if State.Orientation then State.Orientation.Responsiveness = v end
-    end)
-    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 6, function(v) CONFIG.AutoUpgrade = v end)
-    createToggle("Use AO Face", CONFIG.UseAO, 7, function(v) 
-        CONFIG.UseAO = v
-        if v then setupOrientation() else cleanupOrientation() end
-    end)
+    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 5, function(v) CONFIG.AutoUpgrade = v end)
 
     local startBtn = Instance.new("TextButton")
     startBtn.Size = UDim2.new(1, 0, 0, 55)
@@ -635,7 +571,7 @@ local function createUI()
     startBtn.TextSize = 17
     startBtn.Font = Enum.Font.GothamBold
     startBtn.BorderSizePixel = 0
-    startBtn.LayoutOrder = 8
+    startBtn.LayoutOrder = 6
     startBtn.ZIndex = 11
     startBtn.Parent = scroll
     local startCorner = Instance.new("UICorner")
@@ -645,11 +581,11 @@ local function createUI()
     local footer = Instance.new("TextLabel")
     footer.Size = UDim2.new(1, 0, 0, 20)
     footer.BackgroundTransparency = 1
-    footer.Text = "v23 - v18 + AO"
+    footer.Text = "v24 - no AO, kite mundur"
     footer.TextColor3 = Color3.fromRGB(120, 120, 130)
     footer.TextSize = 11
     footer.Font = Enum.Font.Gotham
-    footer.LayoutOrder = 9
+    footer.LayoutOrder = 7
     footer.ZIndex = 11
     footer.Parent = scroll
 
@@ -666,7 +602,6 @@ local function createUI()
             soStroke.Color = Color3.fromRGB(100, 200, 100)
             setStatus("Idle")
             resetPath()
-            cleanupOrientation()
         else
             State.Running = true
             startBtn.Text = "■  STOP FARM"
@@ -678,7 +613,6 @@ local function createUI()
                 startGame()
                 task.wait(1.5)
                 if CONFIG.AutoUpgrade then upgradeSpell() task.wait(0.5) end
-                if CONFIG.UseAO then setupOrientation() end
                 setStatus("Running")
                 mainLoop()
             end)
@@ -688,4 +622,4 @@ local function createUI()
 end
 
 createUI()
-print("[AutoFarm Mobile v23] Loaded - v18 + AO")
+print("[AutoFarm Mobile v24] Loaded - no AO")
