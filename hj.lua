@@ -1,59 +1,45 @@
--- ╔══════════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN - Anti Lag Edition       ║
--- ║   No GUI - Config di script aja              ║
--- ║   Auto START saat execute                    ║
--- ╚══════════════════════════════════════════════╝
+-- ============================================
+-- AUTO FARM KAITUN - v47
+-- WalkSpeed apply sekali (gak di loop)
+-- ============================================
 
--- ============================================
---           ⚙️ KONFIGURASI - EDIT DI SINI
--- ============================================
+-- ═══════════════════════════════════════════
+--           ⚙️ KONFIGURASI
+-- ═══════════════════════════════════════════
 local CONFIG = {
-    -- Jarak
-    KeepDistance = 60,          -- jarak ideal ke musuh
+    KeepDistance = 60,
+    AttackCooldown = 0.5,
+    LoopDelay = 0.05,
     
-    -- Combat
-    AttackCooldown = 0.5,       -- jeda antar attack Q+E
-    
-    -- Loop
-    LoopDelay = 0.05,           -- delay main loop (0.05 = 20x/detik)
-    
-    -- WalkSpeed
     UseWalkSpeed = true,
     WalkSpeed = 20,
     
-    -- Pathfinding
-    WaypointReached = 4,
-    TargetMoveThreshold = 4,
+    WaypointReached = 2,
+    TargetMoveThreshold = 1,
     
-    -- Auto Features
-    AutoUpgrade = true,         -- auto upgrade spellPower
-    AutoReconnect = true,       -- auto reconnect kalau disconnect
-    AntiAFK = true,             -- anti kick karena idle
+    AutoUpgrade = true,
+    AutoReconnect = true,
+    AntiAFK = true,
     
-    -- Anti Lag
     AntiLag = true,
-    AntiLag_HidePlayers = true,    -- sembunyiin player lain
-    AntiLag_DisableParticles = true,-- matiin particle effects
-    AntiLag_DisableDecals = true,   -- matiin decal/texture
-    AntiLag_LowGraphics = true,     -- graphics minimal
-    AntiLag_HideTerrain = true,    -- sembunyiin terrain
-    AntiLag_DisableAnimations = true, -- matiin animasi player lain
-    AntiLag_HideAccessories = true,-- sembunyiin aksesoris player lain
+    AntiLag_HidePlayers = true,
+    AntiLag_DisableParticles = true,
+    AntiLag_DisableDecals = true,
+    AntiLag_LowGraphics = true,
+    AntiLag_HideTerrain = true,
+    AntiLag_DisableAnimations = true,
+    AntiLag_HideAccessories = true,
     
-    -- Skill
     SkillName = "spellPower",
     UpgradeInterval = 3,
 }
 
--- ============================================
---              SCRIPT (JANGAN EDIT)
--- ============================================
+-- ═══════════════════════════════════════════
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local PathfindingService = game:GetService("PathfindingService")
 local Lighting = game:GetService("Lighting")
-local StarterGui = game:GetService("StarterGui")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
@@ -65,17 +51,16 @@ local State = {
     PathWaypoints = nil, PathIndex = 1, PathTargetPos = nil,
     PathGoalType = nil, PathBusy = false, LastMoveToPos = nil,
     LockedEnemyPos = nil, ShiftlockSaved = nil, OriginalWalkSpeed = nil,
+    WalkSpeedApplied = false,  -- ⭐ flag
 }
 
--- ============================================
---               ANTI LAG
--- ============================================
+-- ═══════════════════════════════════════════
+--              ANTI LAG
+-- ═══════════════════════════════════════════
 local AntiLag = {}
 
 function AntiLag.setup()
     if not CONFIG.AntiLag then return end
-    
-    -- 1. Low graphics
     if CONFIG.AntiLag_LowGraphics then
         pcall(function()
             settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
@@ -84,9 +69,6 @@ function AntiLag.setup()
             Lighting.Brightness = 1
             Lighting.EnvironmentDiffuseScale = 0
             Lighting.EnvironmentSpecularScale = 0
-            Lighting.Ambient = Color3.fromRGB(128, 128, 128)
-            Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
-            
             for _, effect in ipairs(Lighting:GetChildren()) do
                 if effect:IsA("BlurEffect") or effect:IsA("SunRaysEffect")
                     or effect:IsA("ColorCorrectionEffect") or effect:IsA("BloomEffect")
@@ -96,8 +78,6 @@ function AntiLag.setup()
             end
         end)
     end
-    
-    -- 2. Hide terrain (opsional)
     if CONFIG.AntiLag_HideTerrain then
         pcall(function()
             workspace.Terrain.WaterWaveSize = 0
@@ -106,19 +86,14 @@ function AntiLag.setup()
             workspace.Terrain.WaterTransparency = 1
         end)
     end
-    
-    -- 3. Handle existing instances
     AntiLag.processInstance(workspace)
 end
 
 function AntiLag.processInstance(container)
     if not CONFIG.AntiLag then return end
-    
     for _, obj in ipairs(container:GetDescendants()) do
         AntiLag.cleanInstance(obj)
     end
-    
-    -- watch for new instances
     container.DescendantAdded:Connect(function(obj)
         task.wait(0.1)
         AntiLag.cleanInstance(obj)
@@ -127,42 +102,30 @@ end
 
 function AntiLag.cleanInstance(obj)
     pcall(function()
-        -- Particle effects
         if CONFIG.AntiLag_DisableParticles then
-            if obj:IsA("ParticleEmitter") or obj:IsA("Trail") 
-                or obj:IsA("Smoke") or obj:IsA("Fire") 
-                or obj:IsA("Sparkles") or obj:IsA("Explosion") then
+            if obj:IsA("ParticleEmitter") then
                 obj.Enabled = false
-                if obj:IsA("ParticleEmitter") then
-                    obj.Rate = 0
-                end
+                obj.Rate = 0
             end
-            if obj:IsA("Beam") then obj.Enabled = false end
+            if obj:IsA("Trail") or obj:IsA("Smoke") 
+                or obj:IsA("Fire") or obj:IsA("Sparkles") 
+                or obj:IsA("Beam") then
+                obj.Enabled = false
+            end
         end
-        
-        -- Decals / textures
         if CONFIG.AntiLag_DisableDecals then
             if obj:IsA("Decal") or obj:IsA("Texture") then
                 obj.Transparency = 1
             end
         end
-        
-        -- Animations (player lain)
         if CONFIG.AntiLag_DisableAnimations then
-            if obj:IsA("Animation") or obj:IsA("Animator") then
-                -- skip animasi sendiri
-                if obj.Parent then
-                    local char = LocalPlayer.Character
-                    if char and not obj:IsDescendantOf(char) then
-                        if obj:IsA("Animator") then
-                            pcall(function() obj:Destroy() end)
-                        end
-                    end
+            if obj:IsA("Animator") and obj.Parent then
+                local char = LocalPlayer.Character
+                if char and not obj:IsDescendantOf(char) then
+                    pcall(function() obj:Destroy() end)
                 end
             end
         end
-        
-        -- Accessories
         if CONFIG.AntiLag_HideAccessories then
             if obj:IsA("Accessory") or obj:IsA("Hat") then
                 if obj.Parent then
@@ -178,35 +141,31 @@ end
 
 function AntiLag.hideOtherPlayers()
     if not CONFIG.AntiLag_HidePlayers then return end
-    
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            for _, part in ipairs(player.Character:GetDescendants()) do
-                if part:IsA("BasePart") or part:IsA("Decal") then
-                    part.Transparency = 1
-                end
+    local function hideChar(char)
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") or part:IsA("Decal") then
+                part.Transparency = 1
             end
         end
     end
-    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            hideChar(player.Character)
+        end
+    end
     Players.PlayerAdded:Connect(function(player)
         player.CharacterAdded:Connect(function(char)
             task.wait(1)
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") or part:IsA("Decal") then
-                    part.Transparency = 1
-                end
-            end
+            hideChar(char)
         end)
     end)
 end
 
--- ============================================
+-- ═══════════════════════════════════════════
 --              ANTI AFK
--- ============================================
+-- ═══════════════════════════════════════════
 local function setupAntiAFK()
     if not CONFIG.AntiAFK then return end
-    
     pcall(function()
         LocalPlayer.Idled:Connect(function()
             local VirtualUser = game:GetService("VirtualUser")
@@ -216,16 +175,14 @@ local function setupAntiAFK()
     end)
 end
 
--- ============================================
+-- ═══════════════════════════════════════════
 --              AUTO RECONNECT
--- ============================================
+-- ═══════════════════════════════════════════
 local function setupAutoReconnect()
     if not CONFIG.AutoReconnect then return end
-    
     pcall(function()
         game:GetService("CoreGui").RobloxPromptGui.promptOverlay.ChildAdded:Connect(function(child)
             if child.Name == "ErrorPrompt" then
-                -- coba reconnect
                 task.wait(3)
                 game:GetService("TeleportService"):Teleport(game.PlaceId, LocalPlayer)
             end
@@ -233,9 +190,9 @@ local function setupAutoReconnect()
     end)
 end
 
--- ============================================
+-- ═══════════════════════════════════════════
 --              KEYPRESS
--- ============================================
+-- ═══════════════════════════════════════════
 local KEY_Q = 0x51
 local KEY_E = 0x45
 
@@ -250,9 +207,9 @@ local function pressE()
     pcall(function() keyrelease(KEY_E) end)
 end
 
--- ============================================
+-- ═══════════════════════════════════════════
 --              SHIFTLOCK
--- ============================================
+-- ═══════════════════════════════════════════
 local function setShiftlock(enabled)
     pcall(function()
         local sl = LocalPlayer:FindFirstChild("shiftlockMobile")
@@ -268,19 +225,21 @@ local function setShiftlock(enabled)
     end)
 end
 
--- ============================================
---              WALKSPEED
--- ============================================
-local function applyWalkSpeed()
+-- ═══════════════════════════════════════════
+--              WALKSPEED (APPLY SEKALI) ⭐
+-- ═══════════════════════════════════════════
+local function applyWalkSpeedOnce()
     if not CONFIG.UseWalkSpeed then return end
-    if State.Humanoid then
-        pcall(function() State.Humanoid.WalkSpeed = CONFIG.WalkSpeed end)
-    end
+    if not State.Humanoid then return end
+    pcall(function()
+        State.Humanoid.WalkSpeed = CONFIG.WalkSpeed
+    end)
+    State.WalkSpeedApplied = true
 end
 
--- ============================================
+-- ═══════════════════════════════════════════
 --              CAMERA LOCK
--- ============================================
+-- ═══════════════════════════════════════════
 RunService.RenderStepped:Connect(function()
     if not State.Running then return end
     if not State.LockedEnemyPos then return end
@@ -290,27 +249,33 @@ RunService.RenderStepped:Connect(function()
     Camera.CFrame = CFrame.new(camPos, Vector3.new(tp.X, camPos.Y + 1.5, tp.Z))
 end)
 
--- ============================================
+-- ═══════════════════════════════════════════
 --              CHARACTER
--- ============================================
+-- ═══════════════════════════════════════════
 local function setupCharacter(char)
     State.Character = char
     State.Humanoid = char:WaitForChild("Humanoid")
     State.RootPart = char:WaitForChild("HumanoidRootPart")
+    State.WalkSpeedApplied = false  -- reset flag untuk karakter baru
+    
     if State.OriginalWalkSpeed == nil and State.Humanoid then
         State.OriginalWalkSpeed = State.Humanoid.WalkSpeed
     end
-    task.wait(0.5)
-    applyWalkSpeed()
+    
+    task.wait(1)  -- tunggu load selesai
+    
+    -- ⭐ apply sekali aja
+    applyWalkSpeedOnce()
+    
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
 end
 
 if LocalPlayer.Character then setupCharacter(LocalPlayer.Character) end
 LocalPlayer.CharacterAdded:Connect(setupCharacter)
 
--- ============================================
+-- ═══════════════════════════════════════════
 --              REMOTES
--- ============================================
+-- ═══════════════════════════════════════════
 local function startGame()
     local remotes = ReplicatedStorage:FindFirstChild("remotes")
     if not remotes then return end
@@ -329,9 +294,9 @@ local function upgradeSpell()
     end
 end
 
--- ============================================
+-- ═══════════════════════════════════════════
 --              ENEMY FOLDER
--- ============================================
+-- ═══════════════════════════════════════════
 local function scanAllEnemyFolders()
     local folders = {}
     for _, obj in ipairs(workspace:GetDescendants()) do
@@ -352,9 +317,9 @@ local function getEnemyFolders()
     return State.EnemyFolders
 end
 
--- ============================================
+-- ═══════════════════════════════════════════
 --              HUMANOID
--- ============================================
+-- ═══════════════════════════════════════════
 local function getHumanoidAndHRP(enemy)
     if not enemy or not enemy.Parent then return nil, nil end
     local hum = enemy:FindFirstChildOfClass("Humanoid") 
@@ -399,9 +364,9 @@ local function findNearestEnemy()
     return nearest, totalCount
 end
 
--- ============================================
+-- ═══════════════════════════════════════════
 --              PATH
--- ============================================
+-- ═══════════════════════════════════════════
 local function resetPath()
     State.PathWaypoints = nil
     State.PathIndex = 1
@@ -543,18 +508,16 @@ local function attackEnemy(enemy)
     return true
 end
 
--- ============================================
+-- ═══════════════════════════════════════════
 --              MAIN LOOP
--- ============================================
+-- ═══════════════════════════════════════════
 local function mainLoop()
     while State.Running do
         task.wait(CONFIG.LoopDelay)
         if not State.Character or not State.Character.Parent then task.wait(0.5) continue end
         if State.Humanoid.Health <= 0 then task.wait(1) continue end
         
-        if CONFIG.UseWalkSpeed and State.Humanoid.WalkSpeed ~= CONFIG.WalkSpeed then
-            applyWalkSpeed()
-        end
+        -- ⭐ GAK ADA re-apply walkspeed di loop!
         
         if CONFIG.AutoUpgrade and (tick() - State.LastUpgrade) >= CONFIG.UpgradeInterval then 
             upgradeSpell() 
@@ -593,62 +556,44 @@ local function mainLoop()
     end
 end
 
--- ============================================
+-- ═══════════════════════════════════════════
 --              INIT
--- ============================================
+-- ═══════════════════════════════════════════
 task.spawn(function()
-    -- 1. Anti Lag
     AntiLag.setup()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
-    
-    -- 2. Anti AFK
     setupAntiAFK()
-    
-    -- 3. Auto Reconnect
     setupAutoReconnect()
     
-    -- 4. Notifikasi console
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN - LOADED        ║")
-    print("║   Anti-Lag: " .. (CONFIG.AntiLag and "ON" or "OFF") .. "                     ║")
-    print("║   Anti-AFK: " .. (CONFIG.AntiAFK and "ON" or "OFF") .. "                     ║")
-    print("║   Auto-Reconnect: " .. (CONFIG.AutoReconnect and "ON" or "OFF") .. "             ║")
-    print("║   Auto Upgrade: " .. (CONFIG.AutoUpgrade and "ON" or "OFF") .. "               ║")
-    print("║   WalkSpeed: " .. (CONFIG.UseWalkSpeed and CONFIG.WalkSpeed or "OFF") .. "                  ║")
+    print("║   AUTO FARM KAITUN v47 - LOADED    ║")
+    print("║   WalkSpeed: " .. (CONFIG.UseWalkSpeed and CONFIG.WalkSpeed or "OFF") .. " (apply sekali)")
     print("╚════════════════════════════════════╝")
     
-    -- 5. AUTO START
     State.Running = true
+    task.wait(3)
     
-    task.wait(3) -- tunggu game load
-    
-    -- start game
     startGame()
     task.wait(2)
     
-    -- upgrade pertama
     if CONFIG.AutoUpgrade then 
         upgradeSpell()
         task.wait(0.5) 
     end
     
-    -- apply walkspeed
-    applyWalkSpeed()
-    
-    -- enable shiftlock
+    applyWalkSpeedOnce()
     setShiftlock(true)
     
     print("[KAITUN] Started auto farm...")
-    
-    -- start main loop
     mainLoop()
 end)
 
--- Kalau character respawn, karakter baru bakal tetep farm karena State.Running = true
+-- Respawn handling
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(2)
     if State.Running then
-        applyWalkSpeed()
+        -- ⭐ apply sekali, bukan loop
+        applyWalkSpeedOnce()
         setShiftlock(true)
     end
 end)
