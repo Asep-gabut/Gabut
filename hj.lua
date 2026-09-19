@@ -27,12 +27,12 @@ local CONFIG = {
     
     -- Anti Lag - SEMUA TRUE
     AntiLag = true,
-    AntiLag_HidePlayers = true,
+    AntiLag_HidePlayers = false,
     AntiLag_DisableParticles = true,
     AntiLag_DisableDecals = true,
     AntiLag_LowGraphics = true,
-    AntiLag_HideTerrain = true,
-    AntiLag_DisableAnimations = true,
+    AntiLag_HideTerrain = false,
+    AntiLag_DisableAnimations = false,
     AntiLag_HideAccessories = true,
     
     -- Skill
