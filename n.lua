@@ -7,20 +7,56 @@ local playerGui = player:WaitForChild("PlayerGui")
 
 local targetPosition = Vector3.new(502, 71, -375)
 
--- ============ GUI ============
+-- ============ GUI ROOT ============
 local gui = Instance.new("ScreenGui")
 gui.Name = "TweenGui"
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
 gui.Parent = playerGui
 
+-- ============ FLOATING OPEN BUTTON ============
+local fab = Instance.new("TextButton")
+fab.Name = "FloatingButton"
+fab.AnchorPoint = Vector2.new(1, 0.5)
+fab.Position = UDim2.new(1, -20, 0.5, 0)
+fab.Size = UDim2.fromOffset(56, 56)
+fab.BackgroundColor3 = Color3.fromRGB(88, 101, 242)
+fab.BorderSizePixel = 0
+fab.Text = "≡"
+fab.Font = Enum.Font.GothamBold
+fab.TextColor3 = Color3.fromRGB(255, 255, 255)
+fab.TextSize = 26
+fab.AutoButtonColor = false
+fab.Active = true
+fab.Draggable = false
+fab.Parent = gui
+
+Instance.new("UICorner", fab).CornerRadius = UDim.new(1, 0)
+
+local fabGrad = Instance.new("UIGradient")
+fabGrad.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(88, 101, 242)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(160, 100, 255)),
+})
+fabGrad.Rotation = 90
+fabGrad.Parent = fab
+
+local fabStroke = Instance.new("UIStroke")
+fabStroke.Color = Color3.fromRGB(180, 160, 255)
+fabStroke.Thickness = 1.5
+fabStroke.Transparency = 0.4
+fabStroke.Parent = fab
+
+-- ============ MAIN PANEL ============
 local container = Instance.new("Frame")
+container.Name = "Panel"
 container.AnchorPoint = Vector2.new(0.5, 0.5)
 container.Position = UDim2.fromScale(0.5, 0.5)
 container.Size = UDim2.fromOffset(340, 340)
 container.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
 container.BorderSizePixel = 0
 container.Active = true
+container.Visible = false
 container.Parent = gui
 
 Instance.new("UICorner", container).CornerRadius = UDim.new(0, 18)
@@ -50,7 +86,7 @@ header.Name = "Header"
 header.BackgroundTransparency = 1
 header.Position = UDim2.fromOffset(0, 0)
 header.Size = UDim2.new(1, 0, 0, 80)
-header.Active = true -- penting: biar bisa ditouch
+header.Active = true
 header.ZIndex = 1
 header.Parent = container
 
@@ -78,9 +114,8 @@ subtitle.TextXAlignment = Enum.TextXAlignment.Left
 subtitle.ZIndex = 2
 subtitle.Parent = header
 
--- ============ Close Button (gede biar gampang ditap) ============
+-- ============ Close Button ============
 local closeButton = Instance.new("TextButton")
-closeButton.Name = "CloseButton"
 closeButton.AnchorPoint = Vector2.new(1, 0)
 closeButton.Position = UDim2.new(1, -14, 0, 14)
 closeButton.Size = UDim2.fromOffset(38, 38)
@@ -96,17 +131,7 @@ closeButton.Parent = container
 
 Instance.new("UICorner", closeButton).CornerRadius = UDim.new(1, 0)
 
-local closeStroke = Instance.new("UIStroke")
-closeStroke.Color = Color3.fromRGB(255, 255, 255)
-closeStroke.Thickness = 1
-closeStroke.Transparency = 0.9
-closeStroke.Parent = closeButton
-
-closeButton.Activated:Connect(function()
-	gui:Destroy()
-end)
-
--- ============ Drag Logic (mobile-safe) ============
+-- ============ Drag (mobile-safe) ============
 local dragging = false
 local dragInput
 local dragStart
@@ -153,6 +178,37 @@ UserInputService.InputChanged:Connect(function(input)
 	end
 end)
 
+-- ============ Toggle Panel Logic ============
+local function openPanel()
+	container.Visible = true
+	container.Size = UDim2.fromOffset(300, 300)
+	container.BackgroundTransparency = 1
+
+	TweenService:Create(container, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+		Size = UDim2.fromOffset(340, 340)
+	}):Play()
+	TweenService:Create(container, TweenInfo.new(0.2), {
+		BackgroundTransparency = 0
+	}):Play()
+end
+
+local function closePanel()
+	local tween = TweenService:Create(container, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+		Size = UDim2.fromOffset(300, 300)
+	})
+	tween:Play()
+	tween.Completed:Wait()
+	container.Visible = false
+end
+
+fab.Activated:Connect(function()
+	openPanel()
+end)
+
+closeButton.Activated:Connect(function()
+	closePanel()
+end)
+
 -- ============ Speed Card ============
 local speedCard = Instance.new("Frame")
 speedCard.Position = UDim2.fromOffset(22, 96)
@@ -163,12 +219,6 @@ speedCard.ZIndex = 2
 speedCard.Parent = container
 
 Instance.new("UICorner", speedCard).CornerRadius = UDim.new(0, 14)
-
-local speedCardStroke = Instance.new("UIStroke")
-speedCardStroke.Color = Color3.fromRGB(255, 255, 255)
-speedCardStroke.Thickness = 1
-speedCardStroke.Transparency = 0.92
-speedCardStroke.Parent = speedCard
 
 local speedLabel = Instance.new("TextLabel")
 speedLabel.BackgroundTransparency = 1
@@ -194,7 +244,6 @@ speedValue.TextXAlignment = Enum.TextXAlignment.Right
 speedValue.ZIndex = 3
 speedValue.Parent = speedCard
 
--- Track
 local trackHolder = Instance.new("Frame")
 trackHolder.AnchorPoint = Vector2.new(0.5, 0.5)
 trackHolder.Position = UDim2.new(0.5, 0, 0, 68)
@@ -222,7 +271,6 @@ fillGrad.Color = ColorSequence.new({
 })
 fillGrad.Parent = trackFill
 
--- Knob (gede buat jari)
 local knob = Instance.new("Frame")
 knob.AnchorPoint = Vector2.new(0.5, 0.5)
 knob.Position = UDim2.fromScale(0.4, 0.5)
@@ -239,7 +287,6 @@ knobStroke.Color = Color3.fromRGB(120, 100, 255)
 knobStroke.Thickness = 2
 knobStroke.Parent = knob
 
--- Hitbox GEDE, full card area
 local hitbox = Instance.new("TextButton")
 hitbox.BackgroundTransparency = 1
 hitbox.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -250,7 +297,7 @@ hitbox.AutoButtonColor = false
 hitbox.ZIndex = 6
 hitbox.Parent = speedCard
 
--- ============ Slider Logic (mobile-safe) ============
+-- ============ Slider Logic ============
 local MIN_SPEED = 1
 local MAX_SPEED = 20
 local currentSpeed = 5
