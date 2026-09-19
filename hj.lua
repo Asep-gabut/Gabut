@@ -1,6 +1,6 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v60                    ║
--- ║   Fix kite nabrak tembok                  ║
+-- ║   AUTO FARM KAITUN v61                    ║
+-- ║   Kite pakai logic Pathfinding yang sama  ║
 -- ╚══════════════════════════════════════════╝
 
 local CONFIG = {
@@ -11,9 +11,9 @@ local CONFIG = {
     UseWalkSpeed = true,
     WalkSpeed = 20,
     
-    -- ⭐ PATHFINDING
+    -- Pathfinding
     WaypointReached = 5,
-    WaypointSkip = 0,           -- ⭐ NO SKIP
+    WaypointSkip = 0,
     AgentRadius = 1,
     AgentHeight = 6,
     AgentCanJump = true,
@@ -224,8 +224,9 @@ setStatus = function(msg, color)
         elseif msg:find("Kiting") then
             local dist = msg:match("(%d+%.%d+)") or "?"
             local count = msg:match("|%s*(%d+)%s*enemy") or "?"
+            local wp = msg:match("wp%s*(%d+/%d+)") or ""
             mainText = "Kiting"
-            subText = string.format("%s stud  •  %s enemy  •  retreat + attack", dist, count)
+            subText = string.format("%s stud  •  %s enemy  %s", dist, count, wp)
             color = color or Color3.fromRGB(255, 180, 100)
         elseif msg:find("No enemy") then
             mainText = "Scanning"
@@ -543,7 +544,7 @@ local function resetPath()
     State.PathGoalType = nil
 end
 
--- ⭐ REQUEST PATH - tanpa WaypointSkip (skip = 0)
+-- ⭐ REQUEST PATH - sama buat approach & kite
 local function requestPath(targetPos, goalType)
     if not State.Humanoid or not State.RootPart then return end
     if not targetPos then return end
@@ -574,7 +575,6 @@ local function requestPath(targetPos, goalType)
         if ok and path.Status == Enum.PathStatus.Success then
             local waypoints = path:GetWaypoints()
             
-            -- skip 0 = gak skip
             if CONFIG.WaypointSkip > 0 and #waypoints > 2 + CONFIG.WaypointSkip then
                 local newWaypoints = {}
                 table.insert(newWaypoints, waypoints[1])
@@ -595,45 +595,34 @@ local function requestPath(targetPos, goalType)
     end)
 end
 
--- ⭐⭐ FOLLOW PATH - NO FALLBACK ⭐⭐
+-- ⭐ FOLLOW PATH - sama buat approach & kite
 local function followPath()
     if not State.Humanoid or not State.RootPart then return end
     
-    -- ⭐ kalau gak ada waypoint, DIEM AJA (jangan lurus ke target!)
-    if not State.PathWaypoints then
-        -- STOP gerak biar gak nabrak tembok
-        return
-    end
-    
-    if State.PathIndex > #State.PathWaypoints then 
-        -- path habis, DIEM juga (nunggu recompute)
-        return 
-    end
+    if not State.PathWaypoints then return end
+    if State.PathIndex > #State.PathWaypoints then return end
     
     local myPos = State.RootPart.Position
     local wp = State.PathWaypoints[State.PathIndex]
     local distToWp = (myPos - wp.Position).Magnitude
     
-    -- advance waypoint
     while distToWp <= CONFIG.WaypointReached and State.PathIndex < #State.PathWaypoints do
         State.PathIndex = State.PathIndex + 1
         wp = State.PathWaypoints[State.PathIndex]
         distToWp = (myPos - wp.Position).Magnitude
     end
     
-    -- spam MoveTo
     State.Humanoid:MoveTo(wp.Position)
     if wp.Action == Enum.PathWaypointAction.Jump then
         State.Humanoid.Jump = true
     end
 end
 
--- ⭐⭐ SAFE POINT - cek obstacle dari titik kandidat ⭐⭐
+-- ⭐ SAFE POINT - simple, tanpa raycast
 local function findSafePointAroundEnemy(enemyPos, myPos)
     local bestPoint = nil
     local bestDist = math.huge
     local samples = 16
-    
     for i = 0, samples - 1 do
         local angle = (i / samples) * math.pi * 2
         local offset = Vector3.new(math.cos(angle), 0, math.sin(angle))
@@ -642,27 +631,12 @@ local function findSafePointAroundEnemy(enemyPos, myPos)
             myPos.Y,
             enemyPos.Z + offset.Z * CONFIG.KeepDistance
         )
-        
-        -- ⭐ cek apakah titik ini bisa dicapai (ada path)
-        -- cek kasar dulu dengan raycast
-        local rayDir = point - enemyPos
-        local rayResult = workspace:Raycast(enemyPos, rayDir, {
-            FilterType = Enum.RaycastFilterType.Exclude,
-            FilterDescendantsInstances = {LocalPlayer.Character}
-        })
-        
-        -- kalau ada tembok di antara, skip titik ini
-        if rayResult then
-            continue
-        end
-        
         local d = (point - myPos).Magnitude
         if d < bestDist then
             bestDist = d
             bestPoint = point
         end
     end
-    
     return bestPoint
 end
 
@@ -706,6 +680,7 @@ local function mainLoop()
                 State.LockedEnemyPos = enemyPos
                 
                 if dist > CONFIG.KeepDistance then
+                    -- ⭐ APPROACH - pakai pathfinding
                     requestPath(enemyPos, "approach")
                     followPath()
                     attackEnemy(enemy)
@@ -717,18 +692,21 @@ local function mainLoop()
                         Color3.fromRGB(100, 180, 255)
                     )
                 else
-                    setStatus(
-                        string.format("Kiting (%.1f) | %d enemy", dist, count),
-                        Color3.fromRGB(255, 180, 100)
-                    )
-                    
-                    -- ⭐ KITE: cari safe point yang gak ada tembok
+                    -- ⭐ KITE - pakai LOGIC PATHFINDING YANG SAMA
+                    -- bedanya cuma target-nya safe point
                     local safePoint = findSafePointAroundEnemy(enemyPos, myPos)
                     if safePoint then
                         requestPath(safePoint, "retreat")
                         followPath()
                     end
                     attackEnemy(enemy)
+                    
+                    setStatus(
+                        string.format("Kiting (%.1f) | %d enemy | wp %d/%d", 
+                            dist, count, State.PathIndex, 
+                            State.PathWaypoints and #State.PathWaypoints or 0),
+                        Color3.fromRGB(255, 180, 100)
+                    )
                 end
             end
         else
@@ -744,8 +722,8 @@ task.spawn(function()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v60 - LOADED    ║")
-    print("║   No fallback + no skip            ║")
+    print("║   AUTO FARM KAITUN v61 - LOADED    ║")
+    print("║   Kite pakai pathfinding sama      ║")
     print("╚════════════════════════════════════╝")
     
     setStatus("Starting...", Color3.fromRGB(255, 220, 100))
