@@ -20,13 +20,13 @@ local CONFIG = {
     KeepDistance = 30,
     DistanceTolerance = 3,
     AttackCooldown = 0.5,
-    WalkSpeed = 32,
+    WalkSpeed = 25,
     SkillName = "spellPower",
     AutoUpgrade = true,
     UpgradeInterval = 3,
     UseShiftlock = true,
     StuckTimeout = 1.0,
-    PathRecomputeDelay = 0.3,
+    PathRecomputeDelay = 1.0,
     FolderScanInterval = 2,
 }
 
