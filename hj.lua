@@ -26,14 +26,14 @@ local CONFIG = {
     AntiAFK = true,
     
     -- Anti Lag - SEMUA TRUE
-    AntiLag = true,
+    AntiLag = false,
     AntiLag_HidePlayers = false,
-    AntiLag_DisableParticles = true,
-    AntiLag_DisableDecals = true,
-    AntiLag_LowGraphics = true,
+    AntiLag_DisableParticles = false,
+    AntiLag_DisableDecals = false,
+    AntiLag_LowGraphics = false,
     AntiLag_HideTerrain = false,
     AntiLag_DisableAnimations = false,
-    AntiLag_HideAccessories = true,
+    AntiLag_HideAccessories = false,
     
     -- Skill
     SkillName = "spellPower",
