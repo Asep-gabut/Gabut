@@ -1,6 +1,6 @@
 -- ============================================
--- AUTO FARM DUNGEON - KAITUN STYLE (v46)
--- No GUI, auto start, all status on screen
+-- AUTO FARM DUNGEON - MOBILE EDITION (v42)
+-- Shiftlock + camera lock ke enemy
 -- ============================================
 
 local Players = game:GetService("Players")
@@ -12,21 +12,16 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
--- ============ CONFIG (HARDCODE) ============
 local CONFIG = {
     KeepDistance = 45,
     AttackCooldown = 0.5,
     AutoUpgrade = true,
-    UpgradeInterval = 3,
-    SkillName = "spellPower",
-    WaypointReached = 2,
-    TargetMoveThreshold = 10,
-    FolderScanInterval = 2,
+    WaypointReached = 4,
+    TargetMoveThreshold = 15,
 }
 
 local State = {
-    Running = true,
-    Character = nil, Humanoid = nil, RootPart = nil,
+    Running = false, Character = nil, Humanoid = nil, RootPart = nil,
     LastAttack = 0, LastUpgrade = 0,
     EnemyFolders = {}, LastFolderScan = 0,
     PathWaypoints = nil,
@@ -35,13 +30,11 @@ local State = {
     PathGoalType = nil,
     PathBusy = false,
     LastMoveToPos = nil,
-    LockedEnemyPos = nil,
+    LockedEnemyPos = nil,      -- ⭐ posisi enemy buat lock kamera
     ShiftlockSaved = nil,
 }
 
-local function logStatus(msg, color)
-    -- placeholder, bakal di-override pas bikin UI
-end
+setStatus = function() end
 
 local KEY_Q = 0x51
 local KEY_E = 0x45
@@ -75,16 +68,22 @@ local function setShiftlock(enabled)
     end)
 end
 
--- ============ CAMERA LOCK ============
+-- ============ CAMERA LOCK KE ENEMY ============
+-- Gerakin kamera ke arah enemy tiap frame
+-- Shiftlock bakal auto-rotate karakter ke arah kamera
 RunService.RenderStepped:Connect(function()
     if not State.Running then return end
-    if not State.LockedEnemyPos or not Camera then return end
+    if not State.LockedEnemyPos then return end
+    if not Camera then return end
+    
     local camPos = Camera.CFrame.Position
     local targetPos = State.LockedEnemyPos
-    Camera.CFrame = CFrame.new(camPos, Vector3.new(targetPos.X, camPos.Y + 1.5, targetPos.Z))
+    
+    -- cuma update arah, gak update posisi kamera
+    local newCF = CFrame.new(camPos, Vector3.new(targetPos.X, camPos.Y + 1.5, targetPos.Z))
+    Camera.CFrame = newCF
 end)
 
--- ============ CHARACTER ============
 local function setupCharacter(char)
     State.Character = char
     State.Humanoid = char:WaitForChild("Humanoid")
@@ -94,7 +93,6 @@ end
 if LocalPlayer.Character then setupCharacter(LocalPlayer.Character) end
 LocalPlayer.CharacterAdded:Connect(setupCharacter)
 
--- ============ REMOTES ============
 local function startGame()
     local remotes = ReplicatedStorage:FindFirstChild("remotes")
     if not remotes then return end
@@ -108,12 +106,11 @@ local function upgradeSpell()
     if not remotes then return end
     local spend = remotes:FindFirstChild("spendSkillPoint")
     if spend then
-        spend:FireServer(CONFIG.SkillName, 1)
+        spend:FireServer("spellPower", 1)
         State.LastUpgrade = tick()
     end
 end
 
--- ============ ENEMY FOLDER ============
 local function scanAllEnemyFolders()
     local folders = {}
     for _, obj in ipairs(workspace:GetDescendants()) do
@@ -127,7 +124,7 @@ end
 
 local function getEnemyFolders()
     local now = tick()
-    if #State.EnemyFolders == 0 or (now - State.LastFolderScan) >= CONFIG.FolderScanInterval then
+    if #State.EnemyFolders == 0 or (now - State.LastFolderScan) >= 2 then
         State.EnemyFolders = scanAllEnemyFolders()
         State.LastFolderScan = now
     end
@@ -202,8 +199,7 @@ local function requestPath(targetPos, goalType)
     if not State.PathWaypoints then needRecompute = true
     elseif State.PathGoalType ~= goalType then needRecompute = true
     elseif State.PathIndex > #State.PathWaypoints then needRecompute = true
-    elseif State.PathTargetPos and (targetPos - State.PathTargetPos).Magnitude > CONFIG.TargetMoveThreshold then 
-        needRecompute = true 
+    elseif State.PathTargetPos and (targetPos - State.PathTargetPos).Magnitude > CONFIG.TargetMoveThreshold then needRecompute = true
     end
     
     if not needRecompute then return end
@@ -268,6 +264,27 @@ local function followPath()
     end
 end
 
+local function findSafePointAroundEnemy(enemyPos, myPos)
+    local bestPoint = nil
+    local bestDist = math.huge
+    local samples = 16
+    for i = 0, samples - 1 do
+        local angle = (i / samples) * math.pi * 2
+        local offset = Vector3.new(math.cos(angle), 0, math.sin(angle))
+        local point = Vector3.new(
+            enemyPos.X + offset.X * CONFIG.KeepDistance,
+            myPos.Y,
+            enemyPos.Z + offset.Z * CONFIG.KeepDistance
+        )
+        local d = (point - myPos).Magnitude
+        if d < bestDist then
+            bestDist = d
+            bestPoint = point
+        end
+    end
+    return bestPoint
+end
+
 local function attackEnemy(enemy)
     local now = tick()
     if now - State.LastAttack < CONFIG.AttackCooldown then return false end
@@ -278,191 +295,16 @@ local function attackEnemy(enemy)
     return true
 end
 
--- ============================================
---           STATUS OVERLAY (KAITUN STYLE)
--- ============================================
-local function createOverlay()
-    if CoreGui:FindFirstChild("AutoFarmOverlay") then
-        CoreGui.AutoFarmOverlay:Destroy()
-    end
-    
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "AutoFarmOverlay"
-    screenGui.ResetOnSpawn = false
-    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    screenGui.IgnoreGuiInset = true
-    screenGui.Parent = CoreGui
-
-    -- Container
-    local container = Instance.new("Frame")
-    container.Size = UDim2.new(0, 340, 0, 90)
-    container.Position = UDim2.new(0, 12, 0, 12)
-    container.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-    container.BackgroundTransparency = 0.4
-    container.BorderSizePixel = 0
-    container.Active = true
-    container.Draggable = true
-    container.ZIndex = 5
-    container.Parent = screenGui
-
-    local cCorner = Instance.new("UICorner")
-    cCorner.CornerRadius = UDim.new(0, 10)
-    cCorner.Parent = container
-
-    local cStroke = Instance.new("UIStroke")
-    cStroke.Color = Color3.fromRGB(60, 220, 90)
-    cStroke.Thickness = 1.5
-    cStroke.Transparency = 0.2
-    cStroke.Parent = container
-
-    -- Title
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, -12, 0, 24)
-    title.Position = UDim2.new(0, 8, 0, 4)
-    title.BackgroundTransparency = 1
-    title.Text = "⚔  AUTO FARM"
-    title.TextColor3 = Color3.fromRGB(120, 255, 140)
-    title.TextSize = 15
-    title.Font = Enum.Font.GothamBold
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.TextStrokeTransparency = 0.6
-    title.ZIndex = 6
-    title.Parent = container
-
-    -- Divider
-    local div = Instance.new("Frame")
-    div.Size = UDim2.new(1, -16, 0, 1)
-    div.Position = UDim2.new(0, 8, 0, 30)
-    div.BackgroundColor3 = Color3.fromRGB(60, 220, 90)
-    div.BackgroundTransparency = 0.7
-    div.BorderSizePixel = 0
-    div.ZIndex = 6
-    div.Parent = container
-
-    -- Status line
-    local statusLbl = Instance.new("TextLabel")
-    statusLbl.Name = "Status"
-    statusLbl.Size = UDim2.new(1, -16, 0, 20)
-    statusLbl.Position = UDim2.new(0, 8, 0, 34)
-    statusLbl.BackgroundTransparency = 1
-    statusLbl.Text = "Initializing..."
-    statusLbl.TextColor3 = Color3.fromRGB(230, 230, 240)
-    statusLbl.TextSize = 13
-    statusLbl.Font = Enum.Font.GothamMedium
-    statusLbl.TextXAlignment = Enum.TextXAlignment.Left
-    statusLbl.TextStrokeTransparency = 0.7
-    statusLbl.ZIndex = 6
-    statusLbl.Parent = container
-
-    -- Info line
-    local infoLbl = Instance.new("TextLabel")
-    infoLbl.Name = "Info"
-    infoLbl.Size = UDim2.new(1, -16, 0, 18)
-    infoLbl.Position = UDim2.new(0, 8, 0, 54)
-    infoLbl.BackgroundTransparency = 1
-    infoLbl.Text = "Menunggu enemy..."
-    infoLbl.TextColor3 = Color3.fromRGB(160, 220, 200)
-    infoLbl.TextSize = 11
-    infoLbl.Font = Enum.Font.Gotham
-    infoLbl.TextXAlignment = Enum.TextXAlignment.Left
-    infoLbl.TextStrokeTransparency = 0.7
-    infoLbl.ZIndex = 6
-    infoLbl.Parent = container
-
-    -- Small upgrade label
-    local upgLbl = Instance.new("TextLabel")
-    upgLbl.Name = "Upgrade"
-    upgLbl.Size = UDim2.new(1, -16, 0, 14)
-    upgLbl.Position = UDim2.new(0, 8, 0, 71)
-    upgLbl.BackgroundTransparency = 1
-    upgLbl.Text = "Upgrade: ready"
-    upgLbl.TextColor3 = Color3.fromRGB(200, 200, 130)
-    upgLbl.TextSize = 10
-    upgLbl.Font = Enum.Font.Gotham
-    upgLbl.TextXAlignment = Enum.TextXAlignment.Left
-    upgLbl.TextStrokeTransparency = 0.7
-    upgLbl.ZIndex = 6
-    upgLbl.Parent = container
-
-    return {
-        ScreenGui = screenGui,
-        Container = container,
-        Stroke = cStroke,
-        Status = statusLbl,
-        Info = infoLbl,
-        Upgrade = upgLbl,
-    }
-end
-
-local UI = createOverlay()
-
-local function setStatus(msg)
-    pcall(function()
-        UI.Status.Text = msg
-    end)
-end
-
-local function setInfo(msg)
-    pcall(function()
-        UI.Info.Text = msg
-    end)
-end
-
-local function setUpgrade(msg)
-    pcall(function()
-        UI.Upgrade.Text = msg
-    end)
-end
-
-local function setBorderColor(color)
-    pcall(function()
-        UI.Stroke.Color = color
-    end)
-end
-
--- ============================================
---              MAIN LOOP (AUTO START)
--- ============================================
 local function mainLoop()
-    setStatus("Starting...")
-    setInfo("Init game...")
-    setBorderColor(Color3.fromRGB(255, 200, 60))
-    
-    startGame()
-    task.wait(2)
-    
-    if CONFIG.AutoUpgrade then
-        setStatus("Upgrading spell...")
-        upgradeSpell()
-        task.wait(0.5)
-    end
-    
-    setBorderColor(Color3.fromRGB(60, 220, 90))
-    setUpgrade("Upgrade: running tiap 3s")
-    
     while State.Running do
         task.wait(0.05)
-        
-        if not State.Character or not State.Character.Parent then 
-            setStatus("Respawn...")
-            task.wait(0.5) 
-            continue 
-        end
-        if State.Humanoid.Health <= 0 then 
-            setStatus("Dead, tunggu respawn...")
-            task.wait(1) 
-            continue 
-        end
+        if not State.Character or not State.Character.Parent then task.wait(0.5) continue end
+        if State.Humanoid.Health <= 0 then task.wait(1) continue end
+        if CONFIG.AutoUpgrade and (tick() - State.LastUpgrade) >= 3 then upgradeSpell() end
 
-        -- shiftlock auto ON
+        -- pastiin shiftlock ON
         local sl = LocalPlayer:FindFirstChild("shiftlockMobile")
         if sl and sl.Value == false then setShiftlock(true) end
-
-        -- auto upgrade
-        if CONFIG.AutoUpgrade and (tick() - State.LastUpgrade) >= CONFIG.UpgradeInterval then
-            upgradeSpell()
-            setUpgrade("Upgrade: OK tiap " .. CONFIG.UpgradeInterval .. "s")
-        end
 
         local enemy, count, roomInfo = findNearestEnemy()
         if enemy then
@@ -472,38 +314,329 @@ local function mainLoop()
                 local enemyPos = ehrp.Position
                 local dist = (enemyPos - myPos).Magnitude
                 
+                -- ⭐ update posisi lock kamera
                 State.LockedEnemyPos = enemyPos
                 
                 local roomStr = ""
                 if roomInfo and #roomInfo > 0 then
-                    roomStr = " | " .. table.concat(roomInfo, ", ")
+                    roomStr = " [" .. table.concat(roomInfo, ", ") .. "]"
                 end
-                
-                setInfo(string.format("Enemy: %d%s", count, roomStr))
 
-                local R = CONFIG.KeepDistance
-
-                if dist > R then
-                    setStatus(string.format("⚔ Approaching (%.1f)", dist))
+                if dist > CONFIG.KeepDistance then
+                    setStatus(string.format("Approaching (%.1f) | %d%s", dist, count, roomStr))
                     requestPath(enemyPos, "approach")
                     followPath()
-                    attackEnemy(enemy)
                 else
-                    setStatus(string.format("⚔ Attacking (%.1f)", dist))
-                    resetPath()
-                    State.Humanoid:MoveTo(myPos)
-                    attackEnemy(enemy)
+                    setStatus(string.format("Kiting (%.1f) | %d%s", dist, count, roomStr))
+                    local safePoint = findSafePointAroundEnemy(enemyPos, myPos)
+                    if safePoint then
+                        requestPath(safePoint, "retreat")
+                        followPath()
+                    end
                 end
+                
+                attackEnemy(enemy)
             end
         else
             State.LockedEnemyPos = nil
             resetPath()
-            setStatus("⚔ Scanning enemy...")
-            setInfo(string.format("Rooms: %d | No enemy", #State.EnemyFolders))
+            setStatus(string.format("No enemy | %d rooms", #State.EnemyFolders))
         end
     end
 end
 
--- ============ AUTO START ============
-task.spawn(mainLoop)
-print("[Kaitun v46] Loaded - auto start, status on screen")
+-- ============================================
+--              UI
+-- ============================================
+local function createUI()
+    if CoreGui:FindFirstChild("AutoFarmUI") then CoreGui.AutoFarmUI:Destroy() end
+
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "AutoFarmUI"
+    screenGui.ResetOnSpawn = false
+    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    screenGui.IgnoreGuiInset = true
+    screenGui.Parent = CoreGui
+
+    local statusOverlay = Instance.new("TextLabel")
+    statusOverlay.Size = UDim2.new(0, 420, 0, 32)
+    statusOverlay.Position = UDim2.new(0.5, -210, 0, 10)
+    statusOverlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    statusOverlay.BackgroundTransparency = 0.4
+    statusOverlay.Text = "⚔ Idle"
+    statusOverlay.TextColor3 = Color3.fromRGB(180, 255, 180)
+    statusOverlay.TextSize = 16
+    statusOverlay.Font = Enum.Font.GothamBold
+    statusOverlay.TextStrokeTransparency = 0.5
+    statusOverlay.ZIndex = 5
+    statusOverlay.Parent = screenGui
+    local soCorner = Instance.new("UICorner")
+    soCorner.CornerRadius = UDim.new(0, 8)
+    soCorner.Parent = statusOverlay
+    local soStroke = Instance.new("UIStroke")
+    soStroke.Color = Color3.fromRGB(100, 200, 100)
+    soStroke.Thickness = 1.5
+    soStroke.Transparency = 0.3
+    soStroke.Parent = statusOverlay
+
+    setStatus = function(msg)
+        pcall(function() statusOverlay.Text = "⚔ " .. msg end)
+    end
+
+    local floatBtn = Instance.new("TextButton")
+    floatBtn.Size = UDim2.new(0, 55, 0, 55)
+    floatBtn.Position = UDim2.new(0, 15, 0.5, -27)
+    floatBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
+    floatBtn.Text = "⚙"
+    floatBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    floatBtn.TextSize = 24
+    floatBtn.Font = Enum.Font.GothamBold
+    floatBtn.BorderSizePixel = 0
+    floatBtn.Active = true
+    floatBtn.Draggable = true
+    floatBtn.ZIndex = 5
+    floatBtn.Parent = screenGui
+    local fbCorner = Instance.new("UICorner")
+    fbCorner.CornerRadius = UDim.new(1, 0)
+    fbCorner.Parent = floatBtn
+    local fbStroke = Instance.new("UIStroke")
+    fbStroke.Color = Color3.fromRGB(255, 255, 255)
+    fbStroke.Thickness = 2
+    fbStroke.Transparency = 0.3
+    fbStroke.Parent = floatBtn
+
+    local main = Instance.new("Frame")
+    main.Size = UDim2.new(0, 300, 0, 460)
+    main.Position = UDim2.new(0.5, -150, 0.5, -230)
+    main.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    main.BorderSizePixel = 0
+    main.Active = true
+    main.Draggable = true
+    main.Visible = false
+    main.ZIndex = 10
+    main.Parent = screenGui
+    local mainCorner = Instance.new("UICorner")
+    mainCorner.CornerRadius = UDim.new(0, 14)
+    mainCorner.Parent = main
+    local mainStroke = Instance.new("UIStroke")
+    mainStroke.Color = Color3.fromRGB(80, 120, 255)
+    mainStroke.Thickness = 2
+    mainStroke.Parent = main
+
+    local title = Instance.new("Frame")
+    title.Size = UDim2.new(1, 0, 0, 45)
+    title.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+    title.BorderSizePixel = 0
+    title.ZIndex = 11
+    title.Parent = main
+    local titleCorner = Instance.new("UICorner")
+    titleCorner.CornerRadius = UDim.new(0, 14)
+    titleCorner.Parent = title
+    local titleFix = Instance.new("Frame")
+    titleFix.Size = UDim2.new(1, 0, 0, 15)
+    titleFix.Position = UDim2.new(0, 0, 1, -15)
+    titleFix.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+    titleFix.BorderSizePixel = 0
+    titleFix.ZIndex = 11
+    titleFix.Parent = title
+
+    local titleText = Instance.new("TextLabel")
+    titleText.Size = UDim2.new(1, -100, 1, 0)
+    titleText.Position = UDim2.new(0, 15, 0, 0)
+    titleText.BackgroundTransparency = 1
+    titleText.Text = "⚙ SETTINGS"
+    titleText.TextColor3 = Color3.fromRGB(200, 220, 255)
+    titleText.TextSize = 17
+    titleText.Font = Enum.Font.GothamBold
+    titleText.TextXAlignment = Enum.TextXAlignment.Left
+    titleText.ZIndex = 12
+    titleText.Parent = title
+
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Size = UDim2.new(0, 60, 0, 34)
+    closeBtn.Position = UDim2.new(1, -68, 0, 5)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+    closeBtn.Text = "✕"
+    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeBtn.TextSize = 18
+    closeBtn.Font = Enum.Font.GothamBold
+    closeBtn.BorderSizePixel = 0
+    closeBtn.ZIndex = 12
+    closeBtn.Parent = title
+    local closeCorner = Instance.new("UICorner")
+    closeCorner.CornerRadius = UDim.new(0, 8)
+    closeCorner.Parent = closeBtn
+    closeBtn.MouseButton1Click:Connect(function() main.Visible = false end)
+
+    local scroll = Instance.new("ScrollingFrame")
+    scroll.Size = UDim2.new(1, -20, 1, -60)
+    scroll.Position = UDim2.new(0, 10, 0, 50)
+    scroll.BackgroundTransparency = 1
+    scroll.BorderSizePixel = 0
+    scroll.ScrollBarThickness = 4
+    scroll.ScrollBarImageColor3 = Color3.fromRGB(80, 120, 255)
+    scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    scroll.ZIndex = 11
+    scroll.Parent = main
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 8)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = scroll
+
+    local function createInput(labelText, defaultVal, order, callback)
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, 0, 0, 45)
+        row.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+        row.BorderSizePixel = 0
+        row.LayoutOrder = order
+        row.ZIndex = 11
+        row.Parent = scroll
+        local rowCorner = Instance.new("UICorner")
+        rowCorner.CornerRadius = UDim.new(0, 8)
+        rowCorner.Parent = row
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(0.5, -10, 1, 0)
+        lbl.Position = UDim2.new(0, 12, 0, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = labelText
+        lbl.TextColor3 = Color3.fromRGB(200, 200, 210)
+        lbl.TextSize = 14
+        lbl.Font = Enum.Font.GothamMedium
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.ZIndex = 12
+        lbl.Parent = row
+        local box = Instance.new("TextBox")
+        box.Size = UDim2.new(0.45, -15, 0, 32)
+        box.Position = UDim2.new(0.5, 0, 0, 6)
+        box.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+        box.Text = tostring(defaultVal)
+        box.TextColor3 = Color3.fromRGB(255, 255, 255)
+        box.TextSize = 14
+        box.Font = Enum.Font.Gotham
+        box.BorderSizePixel = 0
+        box.ClearTextOnFocus = false
+        box.ZIndex = 12
+        box.Parent = row
+        local boxCorner = Instance.new("UICorner")
+        boxCorner.CornerRadius = UDim.new(0, 6)
+        boxCorner.Parent = box
+        box.FocusLost:Connect(function()
+            local val = tonumber(box.Text)
+            if val then callback(val) end
+        end)
+    end
+
+    local function createToggle(labelText, defaultVal, order, callback)
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, 0, 0, 45)
+        row.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+        row.BorderSizePixel = 0
+        row.LayoutOrder = order
+        row.ZIndex = 11
+        row.Parent = scroll
+        local rowCorner = Instance.new("UICorner")
+        rowCorner.CornerRadius = UDim.new(0, 8)
+        rowCorner.Parent = row
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(0.6, -10, 1, 0)
+        lbl.Position = UDim2.new(0, 12, 0, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = labelText
+        lbl.TextColor3 = Color3.fromRGB(200, 200, 210)
+        lbl.TextSize = 14
+        lbl.Font = Enum.Font.GothamMedium
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.ZIndex = 12
+        lbl.Parent = row
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0, 70, 0, 32)
+        btn.Position = UDim2.new(1, -82, 0, 6)
+        btn.BackgroundColor3 = defaultVal and Color3.fromRGB(60, 180, 90) or Color3.fromRGB(80, 80, 90)
+        btn.Text = defaultVal and "ON" or "OFF"
+        btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        btn.TextSize = 13
+        btn.Font = Enum.Font.GothamBold
+        btn.BorderSizePixel = 0
+        btn.ZIndex = 12
+        btn.Parent = row
+        local btnCorner = Instance.new("UICorner")
+        btnCorner.CornerRadius = UDim.new(0, 8)
+        btnCorner.Parent = btn
+        local state = defaultVal
+        btn.MouseButton1Click:Connect(function()
+            state = not state
+            btn.Text = state and "ON" or "OFF"
+            btn.BackgroundColor3 = state and Color3.fromRGB(60, 180, 90) or Color3.fromRGB(80, 80, 90)
+            callback(state)
+        end)
+    end
+
+    createInput("Keep Distance", CONFIG.KeepDistance, 1, function(v) CONFIG.KeepDistance = v end)
+    createInput("Attack Cooldown", CONFIG.AttackCooldown, 2, function(v) CONFIG.AttackCooldown = v end)
+    createInput("Waypoint Reached", CONFIG.WaypointReached, 3, function(v) CONFIG.WaypointReached = v end)
+    createInput("Target Move Threshold", CONFIG.TargetMoveThreshold, 4, function(v) CONFIG.TargetMoveThreshold = v end)
+    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 5, function(v) CONFIG.AutoUpgrade = v end)
+
+    local startBtn = Instance.new("TextButton")
+    startBtn.Size = UDim2.new(1, 0, 0, 55)
+    startBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
+    startBtn.Text = "▶  START FARM"
+    startBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    startBtn.TextSize = 17
+    startBtn.Font = Enum.Font.GothamBold
+    startBtn.BorderSizePixel = 0
+    startBtn.LayoutOrder = 6
+    startBtn.ZIndex = 11
+    startBtn.Parent = scroll
+    local startCorner = Instance.new("UICorner")
+    startCorner.CornerRadius = UDim.new(0, 10)
+    startCorner.Parent = startBtn
+
+    local footer = Instance.new("TextLabel")
+    footer.Size = UDim2.new(1, 0, 0, 20)
+    footer.BackgroundTransparency = 1
+    footer.Text = "v42 - shiftlock + camera lock"
+    footer.TextColor3 = Color3.fromRGB(120, 120, 130)
+    footer.TextSize = 11
+    footer.Font = Enum.Font.Gotham
+    footer.LayoutOrder = 7
+    footer.ZIndex = 11
+    footer.Parent = scroll
+
+    floatBtn.MouseButton1Click:Connect(function()
+        main.Visible = not main.Visible
+    end)
+
+    startBtn.MouseButton1Click:Connect(function()
+        if State.Running then
+            State.Running = false
+            startBtn.Text = "▶  START FARM"
+            startBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
+            floatBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
+            soStroke.Color = Color3.fromRGB(100, 200, 100)
+            setStatus("Idle")
+            resetPath()
+            State.LockedEnemyPos = nil
+            if State.ShiftlockSaved ~= nil then setShiftlock(State.ShiftlockSaved) end
+        else
+            State.Running = true
+            startBtn.Text = "■  STOP FARM"
+            startBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+            floatBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+            soStroke.Color = Color3.fromRGB(255, 100, 100)
+            setStatus("Starting...")
+            task.spawn(function()
+                startGame()
+                task.wait(1.5)
+                if CONFIG.AutoUpgrade then upgradeSpell() task.wait(0.5) end
+                setStatus("Running")
+                mainLoop()
+            end)
+        end
+    end)
+    setStatus("Idle - tap ⚙")
+end
+
+createUI()
+print("[AutoFarm Mobile v42] Loaded - shiftlock + camera lock")
