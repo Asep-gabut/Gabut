@@ -11,7 +11,7 @@ local CONFIG = {
     AttackCooldown = 0.5,
     LoopDelay = 0.05,
     
-    UseWalkSpeed = true,
+    UseWalkSpeed = false,
     WalkSpeed = 20,
     
     WaypointReached = 2,
