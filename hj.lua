@@ -13,7 +13,7 @@ local CONFIG = {
     
     -- Pathfinding
     WaypointReached = 5,
-    WaypointSkip = 2,
+    WaypointSkip = 0,
     
     AutoUpgrade = true,
     AutoReconnect = true,
