@@ -1,31 +1,23 @@
 -- ============================================
--- AUTO FARM DUNGEON - MOBILE EDITION (v16)
--- Simple mode: anti-nyangkut tembok
+-- AUTO FARM DUNGEON - MOBILE EDITION (v20)
+-- AlignOrientation face + no walkspeed
 -- ============================================
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 local PathfindingService = game:GetService("PathfindingService")
-local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
 local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
-local Camera = workspace.CurrentCamera
 
--- ============ KONFIGURASI (SIMPLE) ============
+-- ============ KONFIGURASI ============
 local CONFIG = {
-    -- basic
     AttackDistance = 50,
     KeepDistance = 30,
     AttackCooldown = 0.5,
-    WalkSpeed = 20,
     AutoUpgrade = true,
-    UseShiftlock = true,
-    -- anti-stuck (jarang perlu diubah)
-    StuckTimeout = 2,
-    UnstickAttempts = 3,
+    KiteSpeed = 1.2,
+    FaceSmoothness = 30,
 }
 
 local State = {
@@ -35,9 +27,6 @@ local State = {
     RootPart = nil,
     LastAttack = 0,
     LastUpgrade = 0,
-    LastPos = nil,
-    StuckTime = 0,
-    UnstickCount = 0,
     EnemyFolders = {},
     LastFolderScan = 0,
     -- path
@@ -45,6 +34,11 @@ local State = {
     PathIndex = 1,
     PathEnemyRef = nil,
     PathTargetPos = nil,
+    LastMoveToPos = nil,
+    LastZone = nil,
+    -- AO
+    Orientation = nil,
+    OrientationAttach = nil,
 }
 
 setStatus = function() end
@@ -65,35 +59,68 @@ local function pressE()
     pcall(function() keyrelease(KEY_E) end)
 end
 
+-- ============ ALIGN ORIENTATION ============
+local function setupOrientation()
+    if not State.RootPart then return end
+    
+    if State.Orientation then State.Orientation:Destroy() end
+    if State.OrientationAttach then State.OrientationAttach:Destroy() end
+    
+    if State.Humanoid then
+        State.Humanoid.AutoRotate = false
+    end
+    
+    local attach = Instance.new("Attachment")
+    attach.Name = "FarmFaceAttach"
+    attach.Parent = State.RootPart
+    State.OrientationAttach = attach
+    
+    local ao = Instance.new("AlignOrientation")
+    ao.Name = "FarmFaceAO"
+    ao.Attachment0 = attach
+    ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
+    ao.MaxTorque = 100000
+    ao.MaxAngularVelocity = 100000
+    ao.Responsiveness = CONFIG.FaceSmoothness
+    ao.Parent = State.RootPart
+    State.Orientation = ao
+end
+
+local function cleanupOrientation()
+    pcall(function()
+        if State.Orientation then State.Orientation:Destroy() end
+        if State.OrientationAttach then State.OrientationAttach:Destroy() end
+        State.Orientation = nil
+        State.OrientationAttach = nil
+        if State.Humanoid then
+            State.Humanoid.AutoRotate = true
+        end
+    end)
+end
+
+local function faceTarget(enemy)
+    if not State.Orientation or not State.RootPart then return end
+    local _, hrp = getHumanoidAndHRP(enemy)
+    if not hrp then return end
+    
+    local myPos = State.RootPart.Position
+    local enemyPos = hrp.Position
+    local targetPos = Vector3.new(enemyPos.X, myPos.Y, enemyPos.Z)
+    
+    State.Orientation.CFrame = CFrame.lookAt(myPos, targetPos)
+end
+
 -- ============ CHARACTER ============
 local function setupCharacter(char)
     State.Character = char
     State.Humanoid = char:WaitForChild("Humanoid")
     State.RootPart = char:WaitForChild("HumanoidRootPart")
+    task.wait(0.5)
+    setupOrientation()
 end
 
 if LocalPlayer.Character then setupCharacter(LocalPlayer.Character) end
 LocalPlayer.CharacterAdded:Connect(setupCharacter)
-
--- ============ WALKSPEED ============
-local function applyWalkSpeed()
-    if State.Humanoid then
-        pcall(function() State.Humanoid.WalkSpeed = CONFIG.WalkSpeed end)
-    end
-end
-
--- ============ SHIFTLOCK ============
-local function setShiftlock(enabled)
-    pcall(function()
-        local sl = LocalPlayer:FindFirstChild("shiftlockMobile")
-        if not sl then
-            for _, obj in ipairs(LocalPlayer:GetDescendants()) do
-                if obj.Name:lower():find("shiftlock") then sl = obj break end
-            end
-        end
-        if sl then sl.Value = enabled end
-    end)
-end
 
 -- ============ REMOTES ============
 local function startGame()
@@ -191,65 +218,13 @@ local function findNearestEnemy()
     return nearest, totalCount, roomInfo
 end
 
--- ============ ANTI-STUCK (SIMPLE & AGRESSIVE) ============
+-- ============ PATH RESET ============
 local function resetPath()
     State.PathWaypoints = nil
     State.PathIndex = 1
     State.PathEnemyRef = nil
     State.PathTargetPos = nil
-end
-
-local function checkStuck()
-    if not State.RootPart then return false end
-    local myPos = State.RootPart.Position
-    if State.LastPos then
-        local moved = (myPos - State.LastPos).Magnitude
-        if moved < 0.5 then
-            State.StuckTime = State.StuckTime + 0.05
-        else
-            State.StuckTime = 0
-            State.UnstickCount = 0  -- reset kalau udah gerak
-        end
-    end
-    State.LastPos = myPos
-    return State.StuckTime >= CONFIG.StuckTimeout
-end
-
-local function unstick()
-    if not State.Humanoid or not State.RootPart then return end
-    
-    State.UnstickCount = State.UnstickCount + 1
-    local myPos = State.RootPart.Position
-    
-    -- Strategi bertingkat berdasarkan attempt
-    if State.UnstickCount == 1 then
-        -- Attempt 1: lompat + jalan random
-        State.Humanoid.Jump = true
-        task.wait(0.1)
-        local angle = math.random() * math.pi * 2
-        local offset = Vector3.new(math.cos(angle) * 8, 0, math.sin(angle) * 8)
-        State.Humanoid:MoveTo(myPos + offset)
-    elseif State.UnstickCount == 2 then
-        -- Attempt 2: mundur dikit + lompat
-        State.Humanoid.Jump = true
-        task.wait(0.1)
-        local back = -State.RootPart.CFrame.LookVector * 6
-        State.Humanoid:MoveTo(myPos + back)
-    else
-        -- Attempt 3+: teleport dikit (kalau executor support)
-        pcall(function()
-            State.RootPart.CFrame = State.RootPart.CFrame + Vector3.new(0, 3, 0)
-        end)
-        State.Humanoid.Jump = true
-        task.wait(0.2)
-        local angle = math.random() * math.pi * 2
-        local offset = Vector3.new(math.cos(angle) * 10, 0, math.sin(angle) * 10)
-        State.Humanoid:MoveTo(myPos + offset)
-        State.UnstickCount = 0  -- reset counter
-    end
-    
-    State.StuckTime = 0
-    resetPath()  -- paksa recompute path
+    State.LastMoveToPos = nil
 end
 
 -- ============ KITING ============
@@ -259,40 +234,34 @@ local function kiteAway(enemy)
     if not hrp then return end
     
     local myPos = State.RootPart.Position
-    local awayDir = (myPos - hrp.Position)
-    awayDir = Vector3.new(awayDir.X, 0, awayDir.Z).Unit
-    local targetPos = myPos + awayDir * (CONFIG.KeepDistance * 0.5)
+    local enemyPos = hrp.Position
     
-    -- kabur: pakai MoveTo langsung aja
-    State.Humanoid:MoveTo(targetPos)
+    local awayDir = myPos - enemyPos
+    awayDir = Vector3.new(awayDir.X, 0, awayDir.Z)
+    if awayDir.Magnitude < 0.1 then return end
+    awayDir = awayDir.Unit
+    
+    State.Humanoid:Move(awayDir * CONFIG.KiteSpeed)
 end
 
--- ============ WALK (SMOOTH, CACHED PATH) ============
+-- ============ WALK ============
 local function walkToEnemy(enemy)
     if not State.Humanoid or not State.RootPart then return end
     local _, hrp = getHumanoidAndHRP(enemy)
     if not hrp then return end
     
-    -- ANTI-STUCK cek dulu
-    if checkStuck() then
-        unstick()
-        return
-    end
-    
     local myPos = State.RootPart.Position
     local enemyPos = hrp.Position
     
-    -- perlu recompute?
     local needRecompute = false
     if not State.PathWaypoints or #State.PathWaypoints == 0 then needRecompute = true end
     if State.PathEnemyRef ~= enemy then needRecompute = true end
     if State.PathWaypoints and State.PathIndex > #State.PathWaypoints then needRecompute = true end
     if State.PathTargetPos then
         local moved = (enemyPos - State.PathTargetPos).Magnitude
-        if moved > 8 then needRecompute = true end
+        if moved > 10 then needRecompute = true end
     end
     
-    -- recompute
     if needRecompute then
         local path = PathfindingService:CreatePath({
             AgentRadius = 3, AgentHeight = 5, AgentCanJump = true,
@@ -308,30 +277,40 @@ local function walkToEnemy(enemy)
             State.PathIndex = 2
             State.PathTargetPos = enemyPos
             State.PathEnemyRef = enemy
+            State.LastMoveToPos = nil
         else
-            -- fallback: coba jump + gerak langsung
-            State.Humanoid.Jump = true
-            State.Humanoid:MoveTo(enemyPos)
+            if not State.LastMoveToPos 
+                or (State.LastMoveToPos - enemyPos).Magnitude > 3 then
+                State.Humanoid:MoveTo(enemyPos)
+                State.LastMoveToPos = enemyPos
+            end
             return
         end
     end
     
-    -- follow waypoint
     if State.PathWaypoints and State.PathIndex <= #State.PathWaypoints then
         local wp = State.PathWaypoints[State.PathIndex]
-        local dist = (myPos - wp.Position).Magnitude
+        local distToWp = (myPos - wp.Position).Magnitude
         
-        if dist <= 4 then
+        if distToWp <= 4 then
             State.PathIndex = State.PathIndex + 1
             if State.PathIndex <= #State.PathWaypoints then
                 local nextWp = State.PathWaypoints[State.PathIndex]
-                State.Humanoid:MoveTo(nextWp.Position)
+                if not State.LastMoveToPos 
+                    or (State.LastMoveToPos - nextWp.Position).Magnitude > 0.5 then
+                    State.Humanoid:MoveTo(nextWp.Position)
+                    State.LastMoveToPos = nextWp.Position
+                end
                 if nextWp.Action == Enum.PathWaypointAction.Jump then
                     State.Humanoid.Jump = true
                 end
             end
         else
-            State.Humanoid:MoveTo(wp.Position)
+            if not State.LastMoveToPos 
+                or (State.LastMoveToPos - wp.Position).Magnitude > 0.5 then
+                State.Humanoid:MoveTo(wp.Position)
+                State.LastMoveToPos = wp.Position
+            end
             if wp.Action == Enum.PathWaypointAction.Jump then
                 State.Humanoid.Jump = true
             end
@@ -351,6 +330,8 @@ end
 
 -- ============ MAIN LOOP ============
 local function mainLoop()
+    State.LastZone = nil
+    
     while State.Running do
         task.wait(0.05)
 
@@ -364,12 +345,11 @@ local function mainLoop()
             continue
         end
 
-        -- walkspeed reapply
-        if State.Humanoid.WalkSpeed ~= CONFIG.WalkSpeed then
-            applyWalkSpeed()
+        -- pastiin AO masih ada
+        if not State.Orientation or not State.Orientation.Parent then
+            setupOrientation()
         end
 
-        -- auto upgrade
         if CONFIG.AutoUpgrade and (tick() - State.LastUpgrade) >= 3 then
             upgradeSpell()
         end
@@ -377,37 +357,66 @@ local function mainLoop()
         local enemy, count, roomInfo = findNearestEnemy()
 
         if enemy then
-            if CONFIG.UseShiftlock then
-                local sl = LocalPlayer:FindFirstChild("shiftlockMobile")
-                if sl and sl.Value == false then setShiftlock(true) end
-            end
+            -- face enemy tiap frame
+            faceTarget(enemy)
             
             local _, ehrp = getHumanoidAndHRP(enemy)
             if ehrp then
                 local dist = (ehrp.Position - State.RootPart.Position).Magnitude
-                local kiteThreshold = CONFIG.KeepDistance - 3
+                
+                local buffer = 8
+                local zone = State.LastZone
+                
+                local shouldKite = false
+                local shouldAttack = false
+                local shouldApproach = false
+                
+                if dist < CONFIG.KeepDistance - 3 then
+                    shouldKite = true
+                elseif zone == "Attack" then
+                    if dist <= CONFIG.AttackDistance + buffer then
+                        shouldAttack = true
+                    else
+                        shouldApproach = true
+                    end
+                else
+                    if dist <= CONFIG.AttackDistance then
+                        shouldAttack = true
+                    else
+                        shouldApproach = true
+                    end
+                end
+                
+                if zone == "Kite" and dist < CONFIG.KeepDistance + 3 then
+                    shouldKite = true
+                    shouldAttack = false
+                    shouldApproach = false
+                end
                 
                 local roomStr = ""
                 if roomInfo and #roomInfo > 0 then
                     roomStr = " [" .. table.concat(roomInfo, ", ") .. "]"
                 end
 
-                if dist < kiteThreshold then
+                if shouldKite then
+                    State.LastZone = "Kite"
                     setStatus(string.format("Kiting (%.1f) | %d%s", dist, count, roomStr))
                     resetPath()
                     task.spawn(function() attackEnemy(enemy) end)
                     kiteAway(enemy)
-                elseif dist <= CONFIG.AttackDistance then
+                elseif shouldAttack then
+                    State.LastZone = "Attack"
                     attackEnemy(enemy)
                     resetPath()
                     setStatus(string.format("Attacking (%.1f) | %d%s", dist, count, roomStr))
-                else
+                elseif shouldApproach then
+                    State.LastZone = "Approach"
                     setStatus(string.format("Approaching (%.1f) | %d%s", dist, count, roomStr))
                     walkToEnemy(enemy)
                 end
             end
         else
-            State.StuckTime = 0
+            State.LastZone = nil
             resetPath()
             setStatus(string.format("No enemy | %d rooms", #State.EnemyFolders))
         end
@@ -429,7 +438,6 @@ local function createUI()
     screenGui.IgnoreGuiInset = true
     screenGui.Parent = CoreGui
 
-    -- STATUS OVERLAY
     local statusOverlay = Instance.new("TextLabel")
     statusOverlay.Size = UDim2.new(0, 420, 0, 32)
     statusOverlay.Position = UDim2.new(0.5, -210, 0, 10)
@@ -457,7 +465,6 @@ local function createUI()
         pcall(function() statusOverlay.Text = "⚔ " .. msg end)
     end
 
-    -- FLOATING BUTTON
     local floatBtn = Instance.new("TextButton")
     floatBtn.Size = UDim2.new(0, 55, 0, 55)
     floatBtn.Position = UDim2.new(0, 15, 0.5, -27)
@@ -482,10 +489,9 @@ local function createUI()
     fbStroke.Transparency = 0.3
     fbStroke.Parent = floatBtn
 
-    -- SETTINGS PANEL
     local main = Instance.new("Frame")
-    main.Size = UDim2.new(0, 300, 0, 480)
-    main.Position = UDim2.new(0.5, -150, 0.5, -240)
+    main.Size = UDim2.new(0, 300, 0, 500)
+    main.Position = UDim2.new(0.5, -150, 0.5, -250)
     main.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
     main.BorderSizePixel = 0
     main.Active = true
@@ -667,19 +673,15 @@ local function createUI()
         end)
     end
 
-    -- setting minimalis
     createInput("Attack Distance", CONFIG.AttackDistance, 1, function(v) CONFIG.AttackDistance = v end)
     createInput("Keep Distance", CONFIG.KeepDistance, 2, function(v) CONFIG.KeepDistance = v end)
     createInput("Attack Cooldown", CONFIG.AttackCooldown, 3, function(v) CONFIG.AttackCooldown = v end)
-    createInput("Walk Speed", CONFIG.WalkSpeed, 4, function(v) 
-        CONFIG.WalkSpeed = v
-        applyWalkSpeed()
+    createInput("Kite Speed", CONFIG.KiteSpeed, 4, function(v) CONFIG.KiteSpeed = v end)
+    createInput("Face Smoothness", CONFIG.FaceSmoothness, 5, function(v) 
+        CONFIG.FaceSmoothness = v
+        if State.Orientation then State.Orientation.Responsiveness = v end
     end)
-    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 5, function(v) CONFIG.AutoUpgrade = v end)
-    createToggle("Use Shiftlock", CONFIG.UseShiftlock, 6, function(v) 
-        CONFIG.UseShiftlock = v
-        if v then setShiftlock(true) else setShiftlock(false) end
-    end)
+    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 6, function(v) CONFIG.AutoUpgrade = v end)
 
     local startBtn = Instance.new("TextButton")
     startBtn.Size = UDim2.new(1, 0, 0, 55)
@@ -700,7 +702,7 @@ local function createUI()
     local footer = Instance.new("TextLabel")
     footer.Size = UDim2.new(1, 0, 0, 20)
     footer.BackgroundTransparency = 1
-    footer.Text = "Simple Mode v16"
+    footer.Text = "v20 - no walkspeed"
     footer.TextColor3 = Color3.fromRGB(120, 120, 130)
     footer.TextSize = 11
     footer.Font = Enum.Font.Gotham
@@ -721,6 +723,7 @@ local function createUI()
             soStroke.Color = Color3.fromRGB(100, 200, 100)
             setStatus("Idle")
             resetPath()
+            cleanupOrientation()
         else
             State.Running = true
             startBtn.Text = "■  STOP FARM"
@@ -736,8 +739,7 @@ local function createUI()
                     upgradeSpell()
                     task.wait(0.5)
                 end
-                if CONFIG.UseShiftlock then setShiftlock(true) end
-                applyWalkSpeed()
+                setupOrientation()
                 setStatus("Running")
                 mainLoop()
             end)
@@ -749,4 +751,4 @@ end
 
 -- ============ INIT ============
 createUI()
-print("[AutoFarm Mobile v16] Loaded - simple mode")
+print("[AutoFarm Mobile v20] Loaded")
