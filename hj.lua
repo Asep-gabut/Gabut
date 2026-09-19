@@ -1,6 +1,6 @@
 -- ============================================
--- AUTO FARM DUNGEON - MOBILE EDITION (v34)
--- Beneran tanpa throttle/cache - compute tiap loop
+-- AUTO FARM DUNGEON - MOBILE EDITION (v36)
+-- Pathfinder non-blocking + skip waypoint
 -- ============================================
 
 local Players = game:GetService("Players")
@@ -11,16 +11,23 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 
 local CONFIG = {
-    KeepDistance = 50,
+    KeepDistance = 45,
     Tolerance = 2,
     AttackCooldown = 0.5,
     AutoUpgrade = true,
+    FacingThreshold = 0.5,
+    StepForward = 1,
+    WaypointSkip = 3,       -- ⭐ skip 3 waypoint, ambil yang lebih jauh
+    WaypointReached = 5,    -- jarak dianggap nyampe waypoint
 }
 
 local State = {
     Running = false, Character = nil, Humanoid = nil, RootPart = nil,
     LastAttack = 0, LastUpgrade = 0,
     EnemyFolders = {}, LastFolderScan = 0,
+    PathBusy = false,        -- ⭐ flag lagi compute
+    PathWaypoints = nil,
+    PathIndex = 1,
 }
 
 setStatus = function() end
@@ -137,27 +144,81 @@ local function findNearestEnemy()
     return nearest, totalCount, roomInfo
 end
 
--- ============ PATHFINDER (compute tiap panggil, no cache) ⭐ ============
+local function isFacingEnemy(enemyPos)
+    if not State.RootPart then return false end
+    local myPos = State.RootPart.Position
+    local look = State.RootPart.CFrame.LookVector
+    look = Vector3.new(look.X, 0, look.Z)
+    if look.Magnitude < 0.01 then return false end
+    look = look.Unit
+    
+    local dirToEnemy = enemyPos - myPos
+    dirToEnemy = Vector3.new(dirToEnemy.X, 0, dirToEnemy.Z)
+    if dirToEnemy.Magnitude < 0.1 then return true end
+    dirToEnemy = dirToEnemy.Unit
+    
+    local dot = look.X * dirToEnemy.X + look.Z * dirToEnemy.Z
+    return dot >= CONFIG.FacingThreshold
+end
+
+-- ============ PATHFINDER (NON-BLOCKING + SKIP WAYPOINT) ⭐ ============
 local function pathMoveTo(targetPos)
     if not State.Humanoid or not State.RootPart then return end
     if not targetPos then return end
-    local myPos = State.RootPart.Position
     
-    -- compute path baru
-    local path = PathfindingService:CreatePath({
-        AgentRadius = 3, AgentHeight = 5, AgentCanJump = true,
-        AgentJumpHeight = 10, AgentMaxSlope = 45,
-    })
-    local ok = pcall(function() path:ComputeAsync(myPos, targetPos) end)
-    if ok and path.Status == Enum.PathStatus.Success then
-        local wps = path:GetWaypoints()
-        if #wps >= 2 then
-            State.Humanoid:MoveTo(wps[2].Position)
-            return
+    -- ⭐ kalau masih ada path valid, follow dulu
+    if State.PathWaypoints and State.PathIndex <= #State.PathWaypoints then
+        local myPos = State.RootPart.Position
+        local wp = State.PathWaypoints[State.PathIndex]
+        local distToWp = (myPos - wp.Position).Magnitude
+        
+        if distToWp <= CONFIG.WaypointReached then
+            State.PathIndex = State.PathIndex + 1
+            if State.PathIndex <= #State.PathWaypoints then
+                State.Humanoid:MoveTo(State.PathWaypoints[State.PathIndex].Position)
+            end
+        else
+            -- pastiin MoveTo masih aktif
+            State.Humanoid:MoveTo(wp.Position)
         end
+        return
     end
-    -- fallback
-    State.Humanoid:MoveTo(targetPos)
+    
+    -- kalau lagi compute, skip
+    if State.PathBusy then return end
+    
+    -- ⭐ compute di BACKGROUND (non-blocking)
+    State.PathBusy = true
+    task.spawn(function()
+        local myPos = State.RootPart.Position
+        local path = PathfindingService:CreatePath({
+            AgentRadius = 3, AgentHeight = 5, AgentCanJump = true,
+            AgentJumpHeight = 10, AgentMaxSlope = 45,
+        })
+        
+        local ok = pcall(function() path:ComputeAsync(myPos, targetPos) end)
+        
+        if ok and path.Status == Enum.PathStatus.Success then
+            local wps = path:GetWaypoints()
+            if #wps >= 2 then
+                -- ⭐ SKIP beberapa waypoint biar lompat jauh
+                local startIdx = math.min(2 + CONFIG.WaypointSkip, #wps)
+                State.PathWaypoints = wps
+                State.PathIndex = startIdx
+                State.Humanoid:MoveTo(wps[startIdx].Position)
+            end
+        else
+            -- fallback
+            State.Humanoid:MoveTo(targetPos)
+        end
+        
+        State.PathBusy = false
+    end)
+end
+
+local function resetPath()
+    State.PathWaypoints = nil
+    State.PathIndex = 1
 end
 
 -- ============ CARI TITIK AMAN DI SEKITAR ENEMY ============
@@ -185,11 +246,12 @@ end
 -- ============ ATTACK ============
 local function attackEnemy(enemy)
     local now = tick()
-    if now - State.LastAttack < CONFIG.AttackCooldown then return end
+    if now - State.LastAttack < CONFIG.AttackCooldown then return false end
     State.LastAttack = now
     pressQ()
     task.wait(0.08)
     pressE()
+    return true
 end
 
 -- ============ MAIN LOOP ============
@@ -213,30 +275,38 @@ local function mainLoop()
                     roomStr = " [" .. table.concat(roomInfo, ", ") .. "]"
                 end
 
-                local lowBound = CONFIG.KeepDistance - CONFIG.Tolerance
-                local highBound = CONFIG.KeepDistance + CONFIG.Tolerance
-
-                if dist > highBound then
-                    -- MAJU sambil attack
-                    setStatus(string.format("Approaching (%.1f) | %d%s", dist, count, roomStr))
-                    pathMoveTo(enemyPos)
-                    attackEnemy(enemy)
-                    
-                elseif dist < lowBound then
-                    -- RETREAT ke titik aman
+                if dist < CONFIG.KeepDistance then
+                    -- RETREAT
                     setStatus(string.format("Retreating (%.1f) | %d%s", dist, count, roomStr))
+                    resetPath()
                     local safePoint = findSafePointAroundEnemy(enemyPos, myPos)
                     if safePoint then
                         pathMoveTo(safePoint)
                     end
-                    
                 else
-                    -- DIAM + ATTACK
-                    setStatus(string.format("Attacking (%.1f) | %d%s", dist, count, roomStr))
-                    attackEnemy(enemy)
+                    -- MAJU + FACING + ATTACK
+                    local dirToEnemy = enemyPos - myPos
+                    dirToEnemy = Vector3.new(dirToEnemy.X, 0, dirToEnemy.Z)
+                    
+                    if dirToEnemy.Magnitude > 0.5 then
+                        local stepPos = myPos + dirToEnemy.Unit * CONFIG.StepForward
+                        pathMoveTo(stepPos)
+                        task.wait(0.03)
+                    end
+                    
+                    if isFacingEnemy(enemyPos) then
+                        if attackEnemy(enemy) then
+                            setStatus(string.format("Attacking (%.1f) | %d%s", dist, count, roomStr))
+                        else
+                            setStatus(string.format("Cooldown (%.1f) | %d%s", dist, count, roomStr))
+                        end
+                    else
+                        setStatus(string.format("Rotating (%.1f) | %d%s", dist, count, roomStr))
+                    end
                 end
             end
         else
+            resetPath()
             setStatus(string.format("No enemy | %d rooms", #State.EnemyFolders))
         end
     end
@@ -303,8 +373,8 @@ local function createUI()
     fbStroke.Parent = floatBtn
 
     local main = Instance.new("Frame")
-    main.Size = UDim2.new(0, 300, 0, 420)
-    main.Position = UDim2.new(0.5, -150, 0.5, -210)
+    main.Size = UDim2.new(0, 300, 0, 540)
+    main.Position = UDim2.new(0.5, -150, 0.5, -270)
     main.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
     main.BorderSizePixel = 0
     main.Active = true
@@ -470,9 +540,12 @@ local function createUI()
     end
 
     createInput("Keep Distance", CONFIG.KeepDistance, 1, function(v) CONFIG.KeepDistance = v end)
-    createInput("Tolerance", CONFIG.Tolerance, 2, function(v) CONFIG.Tolerance = v end)
-    createInput("Attack Cooldown", CONFIG.AttackCooldown, 3, function(v) CONFIG.AttackCooldown = v end)
-    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 4, function(v) CONFIG.AutoUpgrade = v end)
+    createInput("Attack Cooldown", CONFIG.AttackCooldown, 2, function(v) CONFIG.AttackCooldown = v end)
+    createInput("Facing Threshold", CONFIG.FacingThreshold, 3, function(v) CONFIG.FacingThreshold = v end)
+    createInput("Step Forward", CONFIG.StepForward, 4, function(v) CONFIG.StepForward = v end)
+    createInput("Waypoint Skip", CONFIG.WaypointSkip, 5, function(v) CONFIG.WaypointSkip = v end)
+    createInput("Waypoint Reached", CONFIG.WaypointReached, 6, function(v) CONFIG.WaypointReached = v end)
+    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 7, function(v) CONFIG.AutoUpgrade = v end)
 
     local startBtn = Instance.new("TextButton")
     startBtn.Size = UDim2.new(1, 0, 0, 55)
@@ -482,7 +555,7 @@ local function createUI()
     startBtn.TextSize = 17
     startBtn.Font = Enum.Font.GothamBold
     startBtn.BorderSizePixel = 0
-    startBtn.LayoutOrder = 5
+    startBtn.LayoutOrder = 8
     startBtn.ZIndex = 11
     startBtn.Parent = scroll
     local startCorner = Instance.new("UICorner")
@@ -492,11 +565,11 @@ local function createUI()
     local footer = Instance.new("TextLabel")
     footer.Size = UDim2.new(1, 0, 0, 20)
     footer.BackgroundTransparency = 1
-    footer.Text = "v34 - no throttle at all"
+    footer.Text = "v36 - fast pathfinder"
     footer.TextColor3 = Color3.fromRGB(120, 120, 130)
     footer.TextSize = 11
     footer.Font = Enum.Font.Gotham
-    footer.LayoutOrder = 6
+    footer.LayoutOrder = 9
     footer.ZIndex = 11
     footer.Parent = scroll
 
@@ -512,6 +585,7 @@ local function createUI()
             floatBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
             soStroke.Color = Color3.fromRGB(100, 200, 100)
             setStatus("Idle")
+            resetPath()
         else
             State.Running = true
             startBtn.Text = "■  STOP FARM"
@@ -532,4 +606,4 @@ local function createUI()
 end
 
 createUI()
-print("[AutoFarm Mobile v34] Loaded - no throttle")
+print("[AutoFarm Mobile v36] Loaded - fast pathfinder")
