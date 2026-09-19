@@ -1,6 +1,6 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v49                    ║
--- ║   WalkSpeed loop + spam MoveTo pathfinder ║
+-- ║   AUTO FARM KAITUN v50                    ║
+-- ║   Pathfinder v42 + Anti Lag FULL ON       ║
 -- ╚══════════════════════════════════════════╝
 
 -- ═══════════════════════════════════════════
@@ -16,8 +16,8 @@ local CONFIG = {
     UseWalkSpeed = true,
     WalkSpeed = 20,
     
-    -- Pathfinding
-    WaypointReached = 1,
+    -- Pathfinding (v42 style)
+    WaypointReached = 2,
     TargetMoveThreshold = 1,
     
     -- Auto
@@ -25,13 +25,15 @@ local CONFIG = {
     AutoReconnect = true,
     AntiAFK = true,
     
-    -- Anti Lag
+    -- Anti Lag - SEMUA TRUE
     AntiLag = true,
     AntiLag_HidePlayers = true,
     AntiLag_DisableParticles = true,
     AntiLag_DisableDecals = true,
     AntiLag_LowGraphics = true,
     AntiLag_HideTerrain = true,
+    AntiLag_DisableAnimations = true,
+    AntiLag_HideAccessories = true,
     
     -- Skill
     SkillName = "spellPower",
@@ -52,18 +54,24 @@ local State = {
     Running = false, Character = nil, Humanoid = nil, RootPart = nil,
     LastAttack = 0, LastUpgrade = 0,
     EnemyFolders = {}, LastFolderScan = 0,
-    PathWaypoints = nil, PathIndex = 1, PathTargetPos = nil,
-    PathGoalType = nil, PathBusy = false,
+    PathWaypoints = nil,
+    PathIndex = 1,
+    PathTargetPos = nil,
+    PathGoalType = nil,
+    PathBusy = false,
+    LastMoveToPos = nil,
     LockedEnemyPos = nil, ShiftlockSaved = nil, OriginalWalkSpeed = nil,
 }
 
 -- ═══════════════════════════════════════════
---              ANTI LAG
+--              ANTI LAG (FULL)
 -- ═══════════════════════════════════════════
 local AntiLag = {}
 
 function AntiLag.setup()
     if not CONFIG.AntiLag then return end
+    
+    -- 1. Low graphics
     if CONFIG.AntiLag_LowGraphics then
         pcall(function()
             settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
@@ -72,6 +80,9 @@ function AntiLag.setup()
             Lighting.Brightness = 1
             Lighting.EnvironmentDiffuseScale = 0
             Lighting.EnvironmentSpecularScale = 0
+            Lighting.Ambient = Color3.fromRGB(128, 128, 128)
+            Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+            
             for _, effect in ipairs(Lighting:GetChildren()) do
                 if effect:IsA("BlurEffect") or effect:IsA("SunRaysEffect")
                     or effect:IsA("ColorCorrectionEffect") or effect:IsA("BloomEffect")
@@ -81,6 +92,8 @@ function AntiLag.setup()
             end
         end)
     end
+    
+    -- 2. Hide terrain
     if CONFIG.AntiLag_HideTerrain then
         pcall(function()
             workspace.Terrain.WaterWaveSize = 0
@@ -89,14 +102,17 @@ function AntiLag.setup()
             workspace.Terrain.WaterTransparency = 1
         end)
     end
+    
     AntiLag.processInstance(workspace)
 end
 
 function AntiLag.processInstance(container)
     if not CONFIG.AntiLag then return end
+    
     for _, obj in ipairs(container:GetDescendants()) do
         AntiLag.cleanInstance(obj)
     end
+    
     container.DescendantAdded:Connect(function(obj)
         task.wait(0.1)
         AntiLag.cleanInstance(obj)
@@ -105,20 +121,53 @@ end
 
 function AntiLag.cleanInstance(obj)
     pcall(function()
+        -- Particles
         if CONFIG.AntiLag_DisableParticles then
             if obj:IsA("ParticleEmitter") then
                 obj.Enabled = false
                 obj.Rate = 0
             end
             if obj:IsA("Trail") or obj:IsA("Smoke") 
-                or obj:IsA("Fire") or obj:IsA("Sparkles") 
-                or obj:IsA("Beam") then
+                or obj:IsA("Fire") or obj:IsA("Sparkles") then
+                obj.Enabled = false
+            end
+            if obj:IsA("Beam") then
                 obj.Enabled = false
             end
         end
+        
+        -- Decals / textures
         if CONFIG.AntiLag_DisableDecals then
             if obj:IsA("Decal") or obj:IsA("Texture") then
                 obj.Transparency = 1
+            end
+        end
+        
+        -- Animations player lain
+        if CONFIG.AntiLag_DisableAnimations then
+            if obj:IsA("Animator") and obj.Parent then
+                local char = LocalPlayer.Character
+                if char and not obj:IsDescendantOf(char) then
+                    pcall(function() obj:Destroy() end)
+                end
+            end
+            if obj:IsA("Animation") and obj.Parent then
+                local char = LocalPlayer.Character
+                if char and not obj:IsDescendantOf(char) then
+                    pcall(function() obj:Destroy() end)
+                end
+            end
+        end
+        
+        -- Accessories
+        if CONFIG.AntiLag_HideAccessories then
+            if obj:IsA("Accessory") or obj:IsA("Hat") then
+                if obj.Parent then
+                    local char = LocalPlayer.Character
+                    if char and not obj:IsDescendantOf(char) then
+                        pcall(function() obj:Destroy() end)
+                    end
+                end
             end
         end
     end)
@@ -126,6 +175,7 @@ end
 
 function AntiLag.hideOtherPlayers()
     if not CONFIG.AntiLag_HidePlayers then return end
+    
     local function hideChar(char)
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") or part:IsA("Decal") then
@@ -133,11 +183,13 @@ function AntiLag.hideOtherPlayers()
             end
         end
     end
+    
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             hideChar(player.Character)
         end
     end
+    
     Players.PlayerAdded:Connect(function(player)
         player.CharacterAdded:Connect(function(char)
             task.wait(1)
@@ -211,6 +263,18 @@ local function setShiftlock(enabled)
 end
 
 -- ═══════════════════════════════════════════
+--              WALKSPEED
+-- ═══════════════════════════════════════════
+local function applyWalkSpeed()
+    if not CONFIG.UseWalkSpeed then return end
+    if State.Humanoid then
+        pcall(function()
+            State.Humanoid.WalkSpeed = CONFIG.WalkSpeed
+        end)
+    end
+end
+
+-- ═══════════════════════════════════════════
 --              CAMERA LOCK
 -- ═══════════════════════════════════════════
 RunService.RenderStepped:Connect(function()
@@ -235,10 +299,7 @@ local function setupCharacter(char)
     end
     
     task.wait(1)
-    -- apply walkspeed pertama kali
-    if CONFIG.UseWalkSpeed and State.Humanoid then
-        pcall(function() State.Humanoid.WalkSpeed = CONFIG.WalkSpeed end)
-    end
+    applyWalkSpeed()
     
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
 end
@@ -338,13 +399,14 @@ local function findNearestEnemy()
 end
 
 -- ═══════════════════════════════════════════
---              PATH
+--              PATH (VERSI V42) ⭐
 -- ═══════════════════════════════════════════
 local function resetPath()
     State.PathWaypoints = nil
     State.PathIndex = 1
     State.PathTargetPos = nil
     State.PathGoalType = nil
+    State.LastMoveToPos = nil
 end
 
 local function requestPath(targetPos, goalType)
@@ -375,28 +437,31 @@ local function requestPath(targetPos, goalType)
             State.PathIndex = 2
             State.PathTargetPos = targetPos
             State.PathGoalType = goalType
+            State.LastMoveToPos = nil
         else
             State.PathWaypoints = nil
             State.PathTargetPos = targetPos
             State.PathGoalType = goalType
+            State.LastMoveToPos = nil
         end
         State.PathBusy = false
     end)
 end
 
--- ⭐ SPAM MoveTo (versi v43 - gak ada LastMoveToPos tracking)
+-- v42 followPath (LastMoveToPos tracking)
 local function followPath()
     if not State.Humanoid or not State.RootPart then return end
-    
-    -- fallback: langsung ke target (kalau path gak ada)
     if not State.PathWaypoints then
         if State.PathTargetPos then
-            State.Humanoid:MoveTo(State.PathTargetPos)
+            if not State.LastMoveToPos 
+                or (State.LastMoveToPos - State.PathTargetPos).Magnitude > 0.5 then
+                State.Humanoid:MoveTo(State.PathTargetPos)
+                State.LastMoveToPos = State.PathTargetPos
+            end
         end
         return
     end
     
-    -- path habis → return
     if State.PathIndex > #State.PathWaypoints then return end
     
     local myPos = State.RootPart.Position
@@ -405,13 +470,17 @@ local function followPath()
     
     if distToWp <= CONFIG.WaypointReached then
         State.PathIndex = State.PathIndex + 1
+        State.LastMoveToPos = nil
         return
     end
     
-    -- ⭐ SPAM MoveTo tiap frame
-    State.Humanoid:MoveTo(wp.Position)
-    if wp.Action == Enum.PathWaypointAction.Jump then
-        State.Humanoid.Jump = true
+    if not State.LastMoveToPos 
+        or (State.LastMoveToPos - wp.Position).Magnitude > 0.5 then
+        State.Humanoid:MoveTo(wp.Position)
+        State.LastMoveToPos = wp.Position
+        if wp.Action == Enum.PathWaypointAction.Jump then
+            State.Humanoid.Jump = true
+        end
     end
 end
 
@@ -459,17 +528,17 @@ local function mainLoop()
         if not State.Character or not State.Character.Parent then task.wait(0.5) continue end
         if State.Humanoid.Health <= 0 then task.wait(1) continue end
         
-        -- ⭐ WalkSpeed re-apply di loop
+        -- WalkSpeed re-apply di loop
         if CONFIG.UseWalkSpeed and State.Humanoid.WalkSpeed ~= CONFIG.WalkSpeed then
-            pcall(function() State.Humanoid.WalkSpeed = CONFIG.WalkSpeed end)
+            applyWalkSpeed()
         end
         
-        -- auto upgrade
+        -- Auto upgrade
         if CONFIG.AutoUpgrade and (tick() - State.LastUpgrade) >= CONFIG.UpgradeInterval then 
             upgradeSpell() 
         end
 
-        -- shiftlock auto ON
+        -- Shiftlock auto ON
         local sl = LocalPlayer:FindFirstChild("shiftlockMobile")
         if sl and sl.Value == false then setShiftlock(true) end
 
@@ -509,14 +578,16 @@ end
 --              INIT
 -- ═══════════════════════════════════════════
 task.spawn(function()
+    -- Anti lag
     AntiLag.setup()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
     setupAntiAFK()
     setupAutoReconnect()
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v49 - LOADED    ║")
-    print("║   WalkSpeed loop + spam path       ║")
+    print("║   AUTO FARM KAITUN v50 - LOADED    ║")
+    print("║   Pathfinder: v42 style            ║")
+    print("║   Anti Lag: FULL ON                ║")
     print("╚════════════════════════════════════╝")
     
     State.Running = true
@@ -530,11 +601,7 @@ task.spawn(function()
         task.wait(0.5) 
     end
     
-    -- apply walkspeed sekali
-    if CONFIG.UseWalkSpeed and State.Humanoid then
-        pcall(function() State.Humanoid.WalkSpeed = CONFIG.WalkSpeed end)
-    end
-    
+    applyWalkSpeed()
     setShiftlock(true)
     
     print("[KAITUN] Started auto farm...")
@@ -544,9 +611,7 @@ end)
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(2)
     if State.Running then
-        if CONFIG.UseWalkSpeed and State.Humanoid then
-            pcall(function() State.Humanoid.WalkSpeed = CONFIG.WalkSpeed end)
-        end
+        applyWalkSpeed()
         setShiftlock(true)
     end
 end)
