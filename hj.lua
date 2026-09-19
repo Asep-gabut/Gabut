@@ -1,14 +1,16 @@
 -- ============================================
--- AUTO FARM DUNGEON - MOBILE EDITION (v41)
--- Smooth pathfinder + BodyGyro face
+-- AUTO FARM DUNGEON - MOBILE EDITION (v42)
+-- Shiftlock + camera lock ke enemy
 -- ============================================
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local PathfindingService = game:GetService("PathfindingService")
 local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
 
 local CONFIG = {
     KeepDistance = 45,
@@ -16,10 +18,6 @@ local CONFIG = {
     AutoUpgrade = true,
     WaypointReached = 4,
     TargetMoveThreshold = 15,
-    UseBodyGyro = true,
-    GyroPower = 10000,
-    GyroP = 3000,
-    GyroD = 500,
 }
 
 local State = {
@@ -32,7 +30,8 @@ local State = {
     PathGoalType = nil,
     PathBusy = false,
     LastMoveToPos = nil,
-    Gyro = nil,
+    LockedEnemyPos = nil,      -- ⭐ posisi enemy buat lock kamera
+    ShiftlockSaved = nil,
 }
 
 setStatus = function() end
@@ -51,41 +50,44 @@ local function pressE()
     pcall(function() keyrelease(KEY_E) end)
 end
 
--- ============ BODYGYRO ============
-local function setupGyro()
-    if not State.RootPart then return end
-    if State.Gyro then State.Gyro:Destroy() end
+-- ============ SHIFTLOCK ============
+local function setShiftlock(enabled)
+    pcall(function()
+        local sl = LocalPlayer:FindFirstChild("shiftlockMobile")
+        if not sl then
+            for _, obj in ipairs(LocalPlayer:GetDescendants()) do
+                if obj.Name:lower():find("shiftlock") then sl = obj break end
+            end
+        end
+        if sl then
+            if State.ShiftlockSaved == nil then
+                State.ShiftlockSaved = sl.Value
+            end
+            sl.Value = enabled
+        end
+    end)
+end
+
+-- ============ CAMERA LOCK KE ENEMY ============
+-- Gerakin kamera ke arah enemy tiap frame
+-- Shiftlock bakal auto-rotate karakter ke arah kamera
+RunService.RenderStepped:Connect(function()
+    if not State.Running then return end
+    if not State.LockedEnemyPos then return end
+    if not Camera then return end
     
-    local bg = Instance.new("BodyGyro")
-    bg.Name = "FarmFaceGyro"
-    bg.MaxTorque = Vector3.new(0, CONFIG.GyroPower, 0)
-    bg.P = CONFIG.GyroP
-    bg.D = CONFIG.GyroD
-    bg.Parent = State.RootPart
-    State.Gyro = bg
-end
-
-local function cleanupGyro()
-    if State.Gyro then
-        State.Gyro:Destroy()
-        State.Gyro = nil
-    end
-end
-
-local function faceEnemy(enemyPos)
-    if not CONFIG.UseBodyGyro then return end
-    if not State.Gyro or not State.RootPart then return end
-    local myPos = State.RootPart.Position
-    local targetPos = Vector3.new(enemyPos.X, myPos.Y, enemyPos.Z)
-    State.Gyro.CFrame = CFrame.lookAt(myPos, targetPos)
-end
+    local camPos = Camera.CFrame.Position
+    local targetPos = State.LockedEnemyPos
+    
+    -- cuma update arah, gak update posisi kamera
+    local newCF = CFrame.new(camPos, Vector3.new(targetPos.X, camPos.Y + 1.5, targetPos.Z))
+    Camera.CFrame = newCF
+end)
 
 local function setupCharacter(char)
     State.Character = char
     State.Humanoid = char:WaitForChild("Humanoid")
     State.RootPart = char:WaitForChild("HumanoidRootPart")
-    task.wait(0.3)
-    if CONFIG.UseBodyGyro then setupGyro() end
 end
 
 if LocalPlayer.Character then setupCharacter(LocalPlayer.Character) end
@@ -227,7 +229,6 @@ local function requestPath(targetPos, goalType)
     end)
 end
 
--- ============ FOLLOW PATH (anti-stutter) ============
 local function followPath()
     if not State.Humanoid or not State.RootPart then return end
     if not State.PathWaypoints then
@@ -299,13 +300,11 @@ local function mainLoop()
         task.wait(0.05)
         if not State.Character or not State.Character.Parent then task.wait(0.5) continue end
         if State.Humanoid.Health <= 0 then task.wait(1) continue end
-        
-        -- pastiin gyro ada
-        if CONFIG.UseBodyGyro and (not State.Gyro or not State.Gyro.Parent) then
-            setupGyro()
-        end
-        
         if CONFIG.AutoUpgrade and (tick() - State.LastUpgrade) >= 3 then upgradeSpell() end
+
+        -- pastiin shiftlock ON
+        local sl = LocalPlayer:FindFirstChild("shiftlockMobile")
+        if sl and sl.Value == false then setShiftlock(true) end
 
         local enemy, count, roomInfo = findNearestEnemy()
         if enemy then
@@ -315,8 +314,8 @@ local function mainLoop()
                 local enemyPos = ehrp.Position
                 local dist = (enemyPos - myPos).Magnitude
                 
-                -- ⭐ FACE ENEMY tiap frame (BodyGyro)
-                faceEnemy(enemyPos)
+                -- ⭐ update posisi lock kamera
+                State.LockedEnemyPos = enemyPos
                 
                 local roomStr = ""
                 if roomInfo and #roomInfo > 0 then
@@ -339,6 +338,7 @@ local function mainLoop()
                 attackEnemy(enemy)
             end
         else
+            State.LockedEnemyPos = nil
             resetPath()
             setStatus(string.format("No enemy | %d rooms", #State.EnemyFolders))
         end
@@ -406,8 +406,8 @@ local function createUI()
     fbStroke.Parent = floatBtn
 
     local main = Instance.new("Frame")
-    main.Size = UDim2.new(0, 300, 0, 560)
-    main.Position = UDim2.new(0.5, -150, 0.5, -280)
+    main.Size = UDim2.new(0, 300, 0, 460)
+    main.Position = UDim2.new(0.5, -150, 0.5, -230)
     main.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
     main.BorderSizePixel = 0
     main.Active = true
@@ -576,15 +576,7 @@ local function createUI()
     createInput("Attack Cooldown", CONFIG.AttackCooldown, 2, function(v) CONFIG.AttackCooldown = v end)
     createInput("Waypoint Reached", CONFIG.WaypointReached, 3, function(v) CONFIG.WaypointReached = v end)
     createInput("Target Move Threshold", CONFIG.TargetMoveThreshold, 4, function(v) CONFIG.TargetMoveThreshold = v end)
-    createInput("Gyro Power", CONFIG.GyroPower, 5, function(v) 
-        CONFIG.GyroPower = v
-        if State.Gyro then State.Gyro.MaxTorque = Vector3.new(0, v, 0) end
-    end)
-    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 6, function(v) CONFIG.AutoUpgrade = v end)
-    createToggle("BodyGyro Face", CONFIG.UseBodyGyro, 7, function(v) 
-        CONFIG.UseBodyGyro = v
-        if v then setupGyro() else cleanupGyro() end
-    end)
+    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 5, function(v) CONFIG.AutoUpgrade = v end)
 
     local startBtn = Instance.new("TextButton")
     startBtn.Size = UDim2.new(1, 0, 0, 55)
@@ -594,7 +586,7 @@ local function createUI()
     startBtn.TextSize = 17
     startBtn.Font = Enum.Font.GothamBold
     startBtn.BorderSizePixel = 0
-    startBtn.LayoutOrder = 8
+    startBtn.LayoutOrder = 6
     startBtn.ZIndex = 11
     startBtn.Parent = scroll
     local startCorner = Instance.new("UICorner")
@@ -604,11 +596,11 @@ local function createUI()
     local footer = Instance.new("TextLabel")
     footer.Size = UDim2.new(1, 0, 0, 20)
     footer.BackgroundTransparency = 1
-    footer.Text = "v41 - smooth + gyro"
+    footer.Text = "v42 - shiftlock + camera lock"
     footer.TextColor3 = Color3.fromRGB(120, 120, 130)
     footer.TextSize = 11
     footer.Font = Enum.Font.Gotham
-    footer.LayoutOrder = 9
+    footer.LayoutOrder = 7
     footer.ZIndex = 11
     footer.Parent = scroll
 
@@ -625,7 +617,8 @@ local function createUI()
             soStroke.Color = Color3.fromRGB(100, 200, 100)
             setStatus("Idle")
             resetPath()
-            cleanupGyro()
+            State.LockedEnemyPos = nil
+            if State.ShiftlockSaved ~= nil then setShiftlock(State.ShiftlockSaved) end
         else
             State.Running = true
             startBtn.Text = "■  STOP FARM"
@@ -637,7 +630,6 @@ local function createUI()
                 startGame()
                 task.wait(1.5)
                 if CONFIG.AutoUpgrade then upgradeSpell() task.wait(0.5) end
-                if CONFIG.UseBodyGyro then setupGyro() end
                 setStatus("Running")
                 mainLoop()
             end)
@@ -647,4 +639,4 @@ local function createUI()
 end
 
 createUI()
-print("[AutoFarm Mobile v41] Loaded - smooth + gyro")
+print("[AutoFarm Mobile v42] Loaded - shiftlock + camera lock")
