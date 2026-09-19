@@ -1,24 +1,54 @@
--- ============================================
--- AUTO FARM DUNGEON - MOBILE EDITION (v42)
--- Shiftlock + camera lock ke enemy
--- ============================================
+-- ╔══════════════════════════════════════════╗
+-- ║   AUTO FARM KAITUN v50                    ║
+-- ║   Pathfinder v42 + Anti Lag FULL ON       ║
+-- ╚══════════════════════════════════════════╝
 
+-- ═══════════════════════════════════════════
+--           ⚙️ KONFIGURASI
+-- ═══════════════════════════════════════════
+local CONFIG = {
+    -- Combat
+    KeepDistance = 50,
+    AttackCooldown = 0.5,
+    LoopDelay = 0.05,
+    
+    -- WalkSpeed
+    UseWalkSpeed = true,
+    WalkSpeed = 20,
+    
+    -- Pathfinding (v42 style)
+    WaypointReached = 5,
+    TargetMoveThreshold = 1,
+    
+    -- Auto
+    AutoUpgrade = true,
+    AutoReconnect = true,
+    AntiAFK = true,
+    
+    -- Anti Lag - SEMUA TRUE
+    AntiLag = true,
+    AntiLag_HidePlayers = true,
+    AntiLag_DisableParticles = true,
+    AntiLag_DisableDecals = true,
+    AntiLag_LowGraphics = true,
+    AntiLag_HideTerrain = true,
+    AntiLag_DisableAnimations = true,
+    AntiLag_HideAccessories = true,
+    
+    -- Skill
+    SkillName = "spellPower",
+    UpgradeInterval = 3,
+}
+
+-- ═══════════════════════════════════════════
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local PathfindingService = game:GetService("PathfindingService")
-local CoreGui = game:GetService("CoreGui")
+local Lighting = game:GetService("Lighting")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
-
-local CONFIG = {
-    KeepDistance = 45,
-    AttackCooldown = 0.5,
-    AutoUpgrade = true,
-    WaypointReached = 4,
-    TargetMoveThreshold = 15,
-}
 
 local State = {
     Running = false, Character = nil, Humanoid = nil, RootPart = nil,
@@ -30,12 +60,176 @@ local State = {
     PathGoalType = nil,
     PathBusy = false,
     LastMoveToPos = nil,
-    LockedEnemyPos = nil,      -- ⭐ posisi enemy buat lock kamera
-    ShiftlockSaved = nil,
+    LockedEnemyPos = nil, ShiftlockSaved = nil, OriginalWalkSpeed = nil,
 }
 
-setStatus = function() end
+-- ═══════════════════════════════════════════
+--              ANTI LAG (FULL)
+-- ═══════════════════════════════════════════
+local AntiLag = {}
 
+function AntiLag.setup()
+    if not CONFIG.AntiLag then return end
+    
+    -- 1. Low graphics
+    if CONFIG.AntiLag_LowGraphics then
+        pcall(function()
+            settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+            Lighting.GlobalShadows = false
+            Lighting.FogEnd = 100000
+            Lighting.Brightness = 1
+            Lighting.EnvironmentDiffuseScale = 0
+            Lighting.EnvironmentSpecularScale = 0
+            Lighting.Ambient = Color3.fromRGB(128, 128, 128)
+            Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+            
+            for _, effect in ipairs(Lighting:GetChildren()) do
+                if effect:IsA("BlurEffect") or effect:IsA("SunRaysEffect")
+                    or effect:IsA("ColorCorrectionEffect") or effect:IsA("BloomEffect")
+                    or effect:IsA("DepthOfFieldEffect") then
+                    effect.Enabled = false
+                end
+            end
+        end)
+    end
+    
+    -- 2. Hide terrain
+    if CONFIG.AntiLag_HideTerrain then
+        pcall(function()
+            workspace.Terrain.WaterWaveSize = 0
+            workspace.Terrain.WaterWaveSpeed = 0
+            workspace.Terrain.WaterReflectance = 0
+            workspace.Terrain.WaterTransparency = 1
+        end)
+    end
+    
+    AntiLag.processInstance(workspace)
+end
+
+function AntiLag.processInstance(container)
+    if not CONFIG.AntiLag then return end
+    
+    for _, obj in ipairs(container:GetDescendants()) do
+        AntiLag.cleanInstance(obj)
+    end
+    
+    container.DescendantAdded:Connect(function(obj)
+        task.wait(0.1)
+        AntiLag.cleanInstance(obj)
+    end)
+end
+
+function AntiLag.cleanInstance(obj)
+    pcall(function()
+        -- Particles
+        if CONFIG.AntiLag_DisableParticles then
+            if obj:IsA("ParticleEmitter") then
+                obj.Enabled = false
+                obj.Rate = 0
+            end
+            if obj:IsA("Trail") or obj:IsA("Smoke") 
+                or obj:IsA("Fire") or obj:IsA("Sparkles") then
+                obj.Enabled = false
+            end
+            if obj:IsA("Beam") then
+                obj.Enabled = false
+            end
+        end
+        
+        -- Decals / textures
+        if CONFIG.AntiLag_DisableDecals then
+            if obj:IsA("Decal") or obj:IsA("Texture") then
+                obj.Transparency = 1
+            end
+        end
+        
+        -- Animations player lain
+        if CONFIG.AntiLag_DisableAnimations then
+            if obj:IsA("Animator") and obj.Parent then
+                local char = LocalPlayer.Character
+                if char and not obj:IsDescendantOf(char) then
+                    pcall(function() obj:Destroy() end)
+                end
+            end
+            if obj:IsA("Animation") and obj.Parent then
+                local char = LocalPlayer.Character
+                if char and not obj:IsDescendantOf(char) then
+                    pcall(function() obj:Destroy() end)
+                end
+            end
+        end
+        
+        -- Accessories
+        if CONFIG.AntiLag_HideAccessories then
+            if obj:IsA("Accessory") or obj:IsA("Hat") then
+                if obj.Parent then
+                    local char = LocalPlayer.Character
+                    if char and not obj:IsDescendantOf(char) then
+                        pcall(function() obj:Destroy() end)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+function AntiLag.hideOtherPlayers()
+    if not CONFIG.AntiLag_HidePlayers then return end
+    
+    local function hideChar(char)
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") or part:IsA("Decal") then
+                part.Transparency = 1
+            end
+        end
+    end
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            hideChar(player.Character)
+        end
+    end
+    
+    Players.PlayerAdded:Connect(function(player)
+        player.CharacterAdded:Connect(function(char)
+            task.wait(1)
+            hideChar(char)
+        end)
+    end)
+end
+
+-- ═══════════════════════════════════════════
+--              ANTI AFK
+-- ═══════════════════════════════════════════
+local function setupAntiAFK()
+    if not CONFIG.AntiAFK then return end
+    pcall(function()
+        LocalPlayer.Idled:Connect(function()
+            local VirtualUser = game:GetService("VirtualUser")
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+        end)
+    end)
+end
+
+-- ═══════════════════════════════════════════
+--              AUTO RECONNECT
+-- ═══════════════════════════════════════════
+local function setupAutoReconnect()
+    if not CONFIG.AutoReconnect then return end
+    pcall(function()
+        game:GetService("CoreGui").RobloxPromptGui.promptOverlay.ChildAdded:Connect(function(child)
+            if child.Name == "ErrorPrompt" then
+                task.wait(3)
+                game:GetService("TeleportService"):Teleport(game.PlaceId, LocalPlayer)
+            end
+        end)
+    end)
+end
+
+-- ═══════════════════════════════════════════
+--              KEYPRESS
+-- ═══════════════════════════════════════════
 local KEY_Q = 0x51
 local KEY_E = 0x45
 
@@ -50,7 +244,9 @@ local function pressE()
     pcall(function() keyrelease(KEY_E) end)
 end
 
--- ============ SHIFTLOCK ============
+-- ═══════════════════════════════════════════
+--              SHIFTLOCK
+-- ═══════════════════════════════════════════
 local function setShiftlock(enabled)
     pcall(function()
         local sl = LocalPlayer:FindFirstChild("shiftlockMobile")
@@ -60,39 +256,60 @@ local function setShiftlock(enabled)
             end
         end
         if sl then
-            if State.ShiftlockSaved == nil then
-                State.ShiftlockSaved = sl.Value
-            end
+            if State.ShiftlockSaved == nil then State.ShiftlockSaved = sl.Value end
             sl.Value = enabled
         end
     end)
 end
 
--- ============ CAMERA LOCK KE ENEMY ============
--- Gerakin kamera ke arah enemy tiap frame
--- Shiftlock bakal auto-rotate karakter ke arah kamera
+-- ═══════════════════════════════════════════
+--              WALKSPEED
+-- ═══════════════════════════════════════════
+local function applyWalkSpeed()
+    if not CONFIG.UseWalkSpeed then return end
+    if State.Humanoid then
+        pcall(function()
+            State.Humanoid.WalkSpeed = CONFIG.WalkSpeed
+        end)
+    end
+end
+
+-- ═══════════════════════════════════════════
+--              CAMERA LOCK
+-- ═══════════════════════════════════════════
 RunService.RenderStepped:Connect(function()
     if not State.Running then return end
     if not State.LockedEnemyPos then return end
     if not Camera then return end
-    
     local camPos = Camera.CFrame.Position
-    local targetPos = State.LockedEnemyPos
-    
-    -- cuma update arah, gak update posisi kamera
-    local newCF = CFrame.new(camPos, Vector3.new(targetPos.X, camPos.Y + 1.5, targetPos.Z))
-    Camera.CFrame = newCF
+    local tp = State.LockedEnemyPos
+    Camera.CFrame = CFrame.new(camPos, Vector3.new(tp.X, camPos.Y + 1.5, tp.Z))
 end)
 
+-- ═══════════════════════════════════════════
+--              CHARACTER
+-- ═══════════════════════════════════════════
 local function setupCharacter(char)
     State.Character = char
     State.Humanoid = char:WaitForChild("Humanoid")
     State.RootPart = char:WaitForChild("HumanoidRootPart")
+    
+    if State.OriginalWalkSpeed == nil and State.Humanoid then
+        State.OriginalWalkSpeed = State.Humanoid.WalkSpeed
+    end
+    
+    task.wait(1)
+    applyWalkSpeed()
+    
+    if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
 end
 
 if LocalPlayer.Character then setupCharacter(LocalPlayer.Character) end
 LocalPlayer.CharacterAdded:Connect(setupCharacter)
 
+-- ═══════════════════════════════════════════
+--              REMOTES
+-- ═══════════════════════════════════════════
 local function startGame()
     local remotes = ReplicatedStorage:FindFirstChild("remotes")
     if not remotes then return end
@@ -106,11 +323,14 @@ local function upgradeSpell()
     if not remotes then return end
     local spend = remotes:FindFirstChild("spendSkillPoint")
     if spend then
-        spend:FireServer("spellPower", 1)
+        spend:FireServer(CONFIG.SkillName, 1)
         State.LastUpgrade = tick()
     end
 end
 
+-- ═══════════════════════════════════════════
+--              ENEMY FOLDER
+-- ═══════════════════════════════════════════
 local function scanAllEnemyFolders()
     local folders = {}
     for _, obj in ipairs(workspace:GetDescendants()) do
@@ -131,6 +351,9 @@ local function getEnemyFolders()
     return State.EnemyFolders
 end
 
+-- ═══════════════════════════════════════════
+--              HUMANOID
+-- ═══════════════════════════════════════════
 local function getHumanoidAndHRP(enemy)
     if not enemy or not enemy.Parent then return nil, nil end
     local hum = enemy:FindFirstChildOfClass("Humanoid") 
@@ -151,19 +374,15 @@ end
 
 local function findNearestEnemy()
     local folders = getEnemyFolders()
-    if #folders == 0 or not State.RootPart then return nil, 0, nil end
+    if #folders == 0 or not State.RootPart then return nil, 0 end
     local nearest, nearestDist = nil, math.huge
     local totalCount = 0
-    local roomInfo = {}
     for _, folder in ipairs(folders) do
         if folder and folder.Parent then
-            local roomName = folder.Parent and folder.Parent.Name or "?"
-            local roomCount = 0
             for _, enemy in ipairs(folder:GetChildren()) do
                 if enemy:IsA("Model") or enemy:IsA("Folder") then
                     local hum, hrp = getHumanoidAndHRP(enemy)
                     if hum and hrp then
-                        roomCount = roomCount + 1
                         totalCount = totalCount + 1
                         local dist = (hrp.Position - State.RootPart.Position).Magnitude
                         if dist < nearestDist then
@@ -173,15 +392,15 @@ local function findNearestEnemy()
                     end
                 end
             end
-            if roomCount > 0 then
-                table.insert(roomInfo, roomName .. ":" .. roomCount)
-            end
         end
     end
     if totalCount == 0 then State.LastFolderScan = 0 end
-    return nearest, totalCount, roomInfo
+    return nearest, totalCount
 end
 
+-- ═══════════════════════════════════════════
+--              PATH (VERSI V42) ⭐
+-- ═══════════════════════════════════════════
 local function resetPath()
     State.PathWaypoints = nil
     State.PathIndex = 1
@@ -229,6 +448,7 @@ local function requestPath(targetPos, goalType)
     end)
 end
 
+-- v42 followPath (LastMoveToPos tracking)
 local function followPath()
     if not State.Humanoid or not State.RootPart then return end
     if not State.PathWaypoints then
@@ -264,6 +484,7 @@ local function followPath()
     end
 end
 
+-- ═══════════════════════════════════════════
 local function findSafePointAroundEnemy(enemyPos, myPos)
     local bestPoint = nil
     local bestDist = math.huge
@@ -285,6 +506,9 @@ local function findSafePointAroundEnemy(enemyPos, myPos)
     return bestPoint
 end
 
+-- ═══════════════════════════════════════════
+--              ATTACK
+-- ═══════════════════════════════════════════
 local function attackEnemy(enemy)
     local now = tick()
     if now - State.LastAttack < CONFIG.AttackCooldown then return false end
@@ -295,18 +519,30 @@ local function attackEnemy(enemy)
     return true
 end
 
+-- ═══════════════════════════════════════════
+--              MAIN LOOP
+-- ═══════════════════════════════════════════
 local function mainLoop()
     while State.Running do
-        task.wait(0.05)
+        task.wait(CONFIG.LoopDelay)
         if not State.Character or not State.Character.Parent then task.wait(0.5) continue end
         if State.Humanoid.Health <= 0 then task.wait(1) continue end
-        if CONFIG.AutoUpgrade and (tick() - State.LastUpgrade) >= 3 then upgradeSpell() end
+        
+        -- WalkSpeed re-apply di loop
+        if CONFIG.UseWalkSpeed and State.Humanoid.WalkSpeed ~= CONFIG.WalkSpeed then
+            applyWalkSpeed()
+        end
+        
+        -- Auto upgrade
+        if CONFIG.AutoUpgrade and (tick() - State.LastUpgrade) >= CONFIG.UpgradeInterval then 
+            upgradeSpell() 
+        end
 
-        -- pastiin shiftlock ON
+        -- Shiftlock auto ON
         local sl = LocalPlayer:FindFirstChild("shiftlockMobile")
         if sl and sl.Value == false then setShiftlock(true) end
 
-        local enemy, count, roomInfo = findNearestEnemy()
+        local enemy, count = findNearestEnemy()
         if enemy then
             local _, ehrp = getHumanoidAndHRP(enemy)
             if ehrp then
@@ -314,329 +550,68 @@ local function mainLoop()
                 local enemyPos = ehrp.Position
                 local dist = (enemyPos - myPos).Magnitude
                 
-                -- ⭐ update posisi lock kamera
                 State.LockedEnemyPos = enemyPos
                 
-                local roomStr = ""
-                if roomInfo and #roomInfo > 0 then
-                    roomStr = " [" .. table.concat(roomInfo, ", ") .. "]"
-                end
-
                 if dist > CONFIG.KeepDistance then
-                    setStatus(string.format("Approaching (%.1f) | %d%s", dist, count, roomStr))
+                    -- APPROACH
                     requestPath(enemyPos, "approach")
                     followPath()
+                    attackEnemy(enemy)
                 else
-                    setStatus(string.format("Kiting (%.1f) | %d%s", dist, count, roomStr))
+                    -- RETREAT
                     local safePoint = findSafePointAroundEnemy(enemyPos, myPos)
                     if safePoint then
                         requestPath(safePoint, "retreat")
                         followPath()
                     end
+                    attackEnemy(enemy)
                 end
-                
-                attackEnemy(enemy)
             end
         else
             State.LockedEnemyPos = nil
             resetPath()
-            setStatus(string.format("No enemy | %d rooms", #State.EnemyFolders))
         end
     end
 end
 
--- ============================================
---              UI
--- ============================================
-local function createUI()
-    if CoreGui:FindFirstChild("AutoFarmUI") then CoreGui.AutoFarmUI:Destroy() end
-
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "AutoFarmUI"
-    screenGui.ResetOnSpawn = false
-    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    screenGui.IgnoreGuiInset = true
-    screenGui.Parent = CoreGui
-
-    local statusOverlay = Instance.new("TextLabel")
-    statusOverlay.Size = UDim2.new(0, 420, 0, 32)
-    statusOverlay.Position = UDim2.new(0.5, -210, 0, 10)
-    statusOverlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-    statusOverlay.BackgroundTransparency = 0.4
-    statusOverlay.Text = "⚔ Idle"
-    statusOverlay.TextColor3 = Color3.fromRGB(180, 255, 180)
-    statusOverlay.TextSize = 16
-    statusOverlay.Font = Enum.Font.GothamBold
-    statusOverlay.TextStrokeTransparency = 0.5
-    statusOverlay.ZIndex = 5
-    statusOverlay.Parent = screenGui
-    local soCorner = Instance.new("UICorner")
-    soCorner.CornerRadius = UDim.new(0, 8)
-    soCorner.Parent = statusOverlay
-    local soStroke = Instance.new("UIStroke")
-    soStroke.Color = Color3.fromRGB(100, 200, 100)
-    soStroke.Thickness = 1.5
-    soStroke.Transparency = 0.3
-    soStroke.Parent = statusOverlay
-
-    setStatus = function(msg)
-        pcall(function() statusOverlay.Text = "⚔ " .. msg end)
+-- ═══════════════════════════════════════════
+--              INIT
+-- ═══════════════════════════════════════════
+task.spawn(function()
+    -- Anti lag
+    AntiLag.setup()
+    if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
+    setupAntiAFK()
+    setupAutoReconnect()
+    
+    print("╔════════════════════════════════════╗")
+    print("║   AUTO FARM KAITUN v50 - LOADED    ║")
+    print("║   Pathfinder: v42 style            ║")
+    print("║   Anti Lag: FULL ON                ║")
+    print("╚════════════════════════════════════╝")
+    
+    State.Running = true
+    task.wait(3)
+    
+    startGame()
+    task.wait(2)
+    
+    if CONFIG.AutoUpgrade then 
+        upgradeSpell()
+        task.wait(0.5) 
     end
+    
+    applyWalkSpeed()
+    setShiftlock(true)
+    
+    print("[KAITUN] Started auto farm...")
+    mainLoop()
+end)
 
-    local floatBtn = Instance.new("TextButton")
-    floatBtn.Size = UDim2.new(0, 55, 0, 55)
-    floatBtn.Position = UDim2.new(0, 15, 0.5, -27)
-    floatBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
-    floatBtn.Text = "⚙"
-    floatBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    floatBtn.TextSize = 24
-    floatBtn.Font = Enum.Font.GothamBold
-    floatBtn.BorderSizePixel = 0
-    floatBtn.Active = true
-    floatBtn.Draggable = true
-    floatBtn.ZIndex = 5
-    floatBtn.Parent = screenGui
-    local fbCorner = Instance.new("UICorner")
-    fbCorner.CornerRadius = UDim.new(1, 0)
-    fbCorner.Parent = floatBtn
-    local fbStroke = Instance.new("UIStroke")
-    fbStroke.Color = Color3.fromRGB(255, 255, 255)
-    fbStroke.Thickness = 2
-    fbStroke.Transparency = 0.3
-    fbStroke.Parent = floatBtn
-
-    local main = Instance.new("Frame")
-    main.Size = UDim2.new(0, 300, 0, 460)
-    main.Position = UDim2.new(0.5, -150, 0.5, -230)
-    main.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
-    main.BorderSizePixel = 0
-    main.Active = true
-    main.Draggable = true
-    main.Visible = false
-    main.ZIndex = 10
-    main.Parent = screenGui
-    local mainCorner = Instance.new("UICorner")
-    mainCorner.CornerRadius = UDim.new(0, 14)
-    mainCorner.Parent = main
-    local mainStroke = Instance.new("UIStroke")
-    mainStroke.Color = Color3.fromRGB(80, 120, 255)
-    mainStroke.Thickness = 2
-    mainStroke.Parent = main
-
-    local title = Instance.new("Frame")
-    title.Size = UDim2.new(1, 0, 0, 45)
-    title.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
-    title.BorderSizePixel = 0
-    title.ZIndex = 11
-    title.Parent = main
-    local titleCorner = Instance.new("UICorner")
-    titleCorner.CornerRadius = UDim.new(0, 14)
-    titleCorner.Parent = title
-    local titleFix = Instance.new("Frame")
-    titleFix.Size = UDim2.new(1, 0, 0, 15)
-    titleFix.Position = UDim2.new(0, 0, 1, -15)
-    titleFix.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
-    titleFix.BorderSizePixel = 0
-    titleFix.ZIndex = 11
-    titleFix.Parent = title
-
-    local titleText = Instance.new("TextLabel")
-    titleText.Size = UDim2.new(1, -100, 1, 0)
-    titleText.Position = UDim2.new(0, 15, 0, 0)
-    titleText.BackgroundTransparency = 1
-    titleText.Text = "⚙ SETTINGS"
-    titleText.TextColor3 = Color3.fromRGB(200, 220, 255)
-    titleText.TextSize = 17
-    titleText.Font = Enum.Font.GothamBold
-    titleText.TextXAlignment = Enum.TextXAlignment.Left
-    titleText.ZIndex = 12
-    titleText.Parent = title
-
-    local closeBtn = Instance.new("TextButton")
-    closeBtn.Size = UDim2.new(0, 60, 0, 34)
-    closeBtn.Position = UDim2.new(1, -68, 0, 5)
-    closeBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
-    closeBtn.Text = "✕"
-    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    closeBtn.TextSize = 18
-    closeBtn.Font = Enum.Font.GothamBold
-    closeBtn.BorderSizePixel = 0
-    closeBtn.ZIndex = 12
-    closeBtn.Parent = title
-    local closeCorner = Instance.new("UICorner")
-    closeCorner.CornerRadius = UDim.new(0, 8)
-    closeCorner.Parent = closeBtn
-    closeBtn.MouseButton1Click:Connect(function() main.Visible = false end)
-
-    local scroll = Instance.new("ScrollingFrame")
-    scroll.Size = UDim2.new(1, -20, 1, -60)
-    scroll.Position = UDim2.new(0, 10, 0, 50)
-    scroll.BackgroundTransparency = 1
-    scroll.BorderSizePixel = 0
-    scroll.ScrollBarThickness = 4
-    scroll.ScrollBarImageColor3 = Color3.fromRGB(80, 120, 255)
-    scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    scroll.ZIndex = 11
-    scroll.Parent = main
-    local layout = Instance.new("UIListLayout")
-    layout.Padding = UDim.new(0, 8)
-    layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Parent = scroll
-
-    local function createInput(labelText, defaultVal, order, callback)
-        local row = Instance.new("Frame")
-        row.Size = UDim2.new(1, 0, 0, 45)
-        row.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
-        row.BorderSizePixel = 0
-        row.LayoutOrder = order
-        row.ZIndex = 11
-        row.Parent = scroll
-        local rowCorner = Instance.new("UICorner")
-        rowCorner.CornerRadius = UDim.new(0, 8)
-        rowCorner.Parent = row
-        local lbl = Instance.new("TextLabel")
-        lbl.Size = UDim2.new(0.5, -10, 1, 0)
-        lbl.Position = UDim2.new(0, 12, 0, 0)
-        lbl.BackgroundTransparency = 1
-        lbl.Text = labelText
-        lbl.TextColor3 = Color3.fromRGB(200, 200, 210)
-        lbl.TextSize = 14
-        lbl.Font = Enum.Font.GothamMedium
-        lbl.TextXAlignment = Enum.TextXAlignment.Left
-        lbl.ZIndex = 12
-        lbl.Parent = row
-        local box = Instance.new("TextBox")
-        box.Size = UDim2.new(0.45, -15, 0, 32)
-        box.Position = UDim2.new(0.5, 0, 0, 6)
-        box.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
-        box.Text = tostring(defaultVal)
-        box.TextColor3 = Color3.fromRGB(255, 255, 255)
-        box.TextSize = 14
-        box.Font = Enum.Font.Gotham
-        box.BorderSizePixel = 0
-        box.ClearTextOnFocus = false
-        box.ZIndex = 12
-        box.Parent = row
-        local boxCorner = Instance.new("UICorner")
-        boxCorner.CornerRadius = UDim.new(0, 6)
-        boxCorner.Parent = box
-        box.FocusLost:Connect(function()
-            local val = tonumber(box.Text)
-            if val then callback(val) end
-        end)
+LocalPlayer.CharacterAdded:Connect(function(char)
+    task.wait(2)
+    if State.Running then
+        applyWalkSpeed()
+        setShiftlock(true)
     end
-
-    local function createToggle(labelText, defaultVal, order, callback)
-        local row = Instance.new("Frame")
-        row.Size = UDim2.new(1, 0, 0, 45)
-        row.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
-        row.BorderSizePixel = 0
-        row.LayoutOrder = order
-        row.ZIndex = 11
-        row.Parent = scroll
-        local rowCorner = Instance.new("UICorner")
-        rowCorner.CornerRadius = UDim.new(0, 8)
-        rowCorner.Parent = row
-        local lbl = Instance.new("TextLabel")
-        lbl.Size = UDim2.new(0.6, -10, 1, 0)
-        lbl.Position = UDim2.new(0, 12, 0, 0)
-        lbl.BackgroundTransparency = 1
-        lbl.Text = labelText
-        lbl.TextColor3 = Color3.fromRGB(200, 200, 210)
-        lbl.TextSize = 14
-        lbl.Font = Enum.Font.GothamMedium
-        lbl.TextXAlignment = Enum.TextXAlignment.Left
-        lbl.ZIndex = 12
-        lbl.Parent = row
-        local btn = Instance.new("TextButton")
-        btn.Size = UDim2.new(0, 70, 0, 32)
-        btn.Position = UDim2.new(1, -82, 0, 6)
-        btn.BackgroundColor3 = defaultVal and Color3.fromRGB(60, 180, 90) or Color3.fromRGB(80, 80, 90)
-        btn.Text = defaultVal and "ON" or "OFF"
-        btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        btn.TextSize = 13
-        btn.Font = Enum.Font.GothamBold
-        btn.BorderSizePixel = 0
-        btn.ZIndex = 12
-        btn.Parent = row
-        local btnCorner = Instance.new("UICorner")
-        btnCorner.CornerRadius = UDim.new(0, 8)
-        btnCorner.Parent = btn
-        local state = defaultVal
-        btn.MouseButton1Click:Connect(function()
-            state = not state
-            btn.Text = state and "ON" or "OFF"
-            btn.BackgroundColor3 = state and Color3.fromRGB(60, 180, 90) or Color3.fromRGB(80, 80, 90)
-            callback(state)
-        end)
-    end
-
-    createInput("Keep Distance", CONFIG.KeepDistance, 1, function(v) CONFIG.KeepDistance = v end)
-    createInput("Attack Cooldown", CONFIG.AttackCooldown, 2, function(v) CONFIG.AttackCooldown = v end)
-    createInput("Waypoint Reached", CONFIG.WaypointReached, 3, function(v) CONFIG.WaypointReached = v end)
-    createInput("Target Move Threshold", CONFIG.TargetMoveThreshold, 4, function(v) CONFIG.TargetMoveThreshold = v end)
-    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 5, function(v) CONFIG.AutoUpgrade = v end)
-
-    local startBtn = Instance.new("TextButton")
-    startBtn.Size = UDim2.new(1, 0, 0, 55)
-    startBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
-    startBtn.Text = "▶  START FARM"
-    startBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    startBtn.TextSize = 17
-    startBtn.Font = Enum.Font.GothamBold
-    startBtn.BorderSizePixel = 0
-    startBtn.LayoutOrder = 6
-    startBtn.ZIndex = 11
-    startBtn.Parent = scroll
-    local startCorner = Instance.new("UICorner")
-    startCorner.CornerRadius = UDim.new(0, 10)
-    startCorner.Parent = startBtn
-
-    local footer = Instance.new("TextLabel")
-    footer.Size = UDim2.new(1, 0, 0, 20)
-    footer.BackgroundTransparency = 1
-    footer.Text = "v42 - shiftlock + camera lock"
-    footer.TextColor3 = Color3.fromRGB(120, 120, 130)
-    footer.TextSize = 11
-    footer.Font = Enum.Font.Gotham
-    footer.LayoutOrder = 7
-    footer.ZIndex = 11
-    footer.Parent = scroll
-
-    floatBtn.MouseButton1Click:Connect(function()
-        main.Visible = not main.Visible
-    end)
-
-    startBtn.MouseButton1Click:Connect(function()
-        if State.Running then
-            State.Running = false
-            startBtn.Text = "▶  START FARM"
-            startBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
-            floatBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
-            soStroke.Color = Color3.fromRGB(100, 200, 100)
-            setStatus("Idle")
-            resetPath()
-            State.LockedEnemyPos = nil
-            if State.ShiftlockSaved ~= nil then setShiftlock(State.ShiftlockSaved) end
-        else
-            State.Running = true
-            startBtn.Text = "■  STOP FARM"
-            startBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
-            floatBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
-            soStroke.Color = Color3.fromRGB(255, 100, 100)
-            setStatus("Starting...")
-            task.spawn(function()
-                startGame()
-                task.wait(1.5)
-                if CONFIG.AutoUpgrade then upgradeSpell() task.wait(0.5) end
-                setStatus("Running")
-                mainLoop()
-            end)
-        end
-    end)
-    setStatus("Idle - tap ⚙")
-end
-
-createUI()
-print("[AutoFarm Mobile v42] Loaded - shiftlock + camera lock")
+end)
