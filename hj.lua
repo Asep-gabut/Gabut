@@ -1,6 +1,6 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v51                    ║
--- ║   Pathfinder v42 + Anti Lag + Status     ║
+-- ║   AUTO FARM KAITUN v54                    ║
+-- ║   Smooth Path + Gradient HUD              ║
 -- ╚══════════════════════════════════════════╝
 
 -- ═══════════════════════════════════════════
@@ -10,15 +10,16 @@ local CONFIG = {
     -- Combat
     KeepDistance = 45,
     AttackCooldown = 0.5,
-    LoopDelay = 0.05,
+    LoopDelay = 0.03,
     
     -- WalkSpeed
     UseWalkSpeed = true,
     WalkSpeed = 20,
     
     -- Pathfinding
-    WaypointReached = 10,
-    TargetMoveThreshold = 1,
+    WaypointReached = 15,
+    WaypointSkip = 2,
+    TargetMoveThreshold = 8,
     
     -- Auto
     AutoUpgrade = true,
@@ -45,6 +46,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local PathfindingService = game:GetService("PathfindingService")
+local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
 local CoreGui = game:GetService("CoreGui")
 
@@ -56,16 +58,15 @@ local State = {
     LastAttack = 0, LastUpgrade = 0,
     EnemyFolders = {}, LastFolderScan = 0,
     PathWaypoints = nil, PathIndex = 1, PathTargetPos = nil,
-    PathGoalType = nil, PathBusy = false, LastMoveToPos = nil,
-    LockedEnemyPos = nil, ShiftlockSaved = nil, OriginalWalkSpeed = nil,
+    PathGoalType = nil, PathBusy = false,
+    PathRequestId = 0, LastMoveToPos = nil,
+    LockedEnemyPos = nil, ShiftlockSaved = nil,
 }
 
 -- ═══════════════════════════════════════════
---              STATUS OVERLAY
+--              STATUS OVERLAY - GRADIENT
 -- ═══════════════════════════════════════════
-if CoreGui:FindFirstChild("FarmStatus") then
-    CoreGui.FarmStatus:Destroy()
-end
+if CoreGui:FindFirstChild("FarmStatus") then CoreGui.FarmStatus:Destroy() end
 
 local statusGui = Instance.new("ScreenGui")
 statusGui.Name = "FarmStatus"
@@ -74,36 +75,214 @@ statusGui.IgnoreGuiInset = true
 statusGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 statusGui.Parent = CoreGui
 
-local statusOverlay = Instance.new("TextLabel")
-statusOverlay.Size = UDim2.new(0, 420, 0, 32)
-statusOverlay.Position = UDim2.new(0.5, -210, 0, 10)
-statusOverlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-statusOverlay.BackgroundTransparency = 0.35
-statusOverlay.Text = "⚔ Idle"
-statusOverlay.TextColor3 = Color3.fromRGB(180, 255, 180)
-statusOverlay.TextSize = 16
-statusOverlay.Font = Enum.Font.GothamBold
-statusOverlay.TextStrokeTransparency = 0.5
-statusOverlay.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-statusOverlay.ZIndex = 5
-statusOverlay.Parent = statusGui
+-- CONTAINER
+local container = Instance.new("Frame")
+container.Size = UDim2.new(0, 400, 0, 62)
+container.Position = UDim2.new(0.5, -200, 0, 15)
+container.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+container.BorderSizePixel = 0
+container.ZIndex = 5
+container.Parent = statusGui
 
-local soCorner = Instance.new("UICorner")
-soCorner.CornerRadius = UDim.new(0, 8)
-soCorner.Parent = statusOverlay
+local containerCorner = Instance.new("UICorner")
+containerCorner.CornerRadius = UDim.new(0, 14)
+containerCorner.Parent = container
 
-local soStroke = Instance.new("UIStroke")
-soStroke.Color = Color3.fromRGB(100, 200, 100)
-soStroke.Thickness = 1.5
-soStroke.Transparency = 0.3
-soStroke.Parent = statusOverlay
+local containerStroke = Instance.new("UIStroke")
+containerStroke.Color = Color3.fromRGB(60, 60, 80)
+containerStroke.Thickness = 1
+containerStroke.Transparency = 0.4
+containerStroke.Parent = container
+
+-- Gradient background
+local gradient = Instance.new("UIGradient")
+gradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(25, 25, 35)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(20, 20, 28)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(30, 25, 40)),
+})
+gradient.Rotation = 45
+gradient.Parent = container
+
+-- GLOW BORDER (atas)
+local glowBar = Instance.new("Frame")
+glowBar.Size = UDim2.new(1, 0, 0, 2)
+glowBar.Position = UDim2.new(0, 0, 0, 0)
+glowBar.BackgroundColor3 = Color3.fromRGB(100, 200, 100)
+glowBar.BorderSizePixel = 0
+glowBar.ZIndex = 6
+glowBar.Parent = container
+
+local glowCorner = Instance.new("UICorner")
+glowCorner.CornerRadius = UDim.new(0, 14)
+glowCorner.Parent = glowBar
+
+-- Fix biar cuma atas yang round
+local glowFix = Instance.new("Frame")
+glowFix.Size = UDim2.new(1, 0, 0, 14)
+glowFix.Position = UDim2.new(0, 0, 1, -14)
+glowFix.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+glowFix.BorderSizePixel = 0
+glowFix.ZIndex = 7
+glowFix.Parent = container
+
+-- ICON CIRCLE
+local iconCircle = Instance.new("Frame")
+iconCircle.Size = UDim2.new(0, 44, 0, 44)
+iconCircle.Position = UDim2.new(0, 10, 0.5, -22)
+iconCircle.BackgroundColor3 = Color3.fromRGB(100, 200, 100)
+iconCircle.BackgroundTransparency = 0.85
+iconCircle.BorderSizePixel = 0
+iconCircle.ZIndex = 8
+iconCircle.Parent = container
+
+local iconCorner = Instance.new("UICorner")
+iconCorner.CornerRadius = UDim.new(1, 0)
+iconCorner.Parent = iconCircle
+
+local iconStroke = Instance.new("UIStroke")
+iconStroke.Color = Color3.fromRGB(100, 200, 100)
+iconStroke.Thickness = 1.5
+iconStroke.Transparency = 0.3
+iconStroke.Parent = iconCircle
+
+local iconText = Instance.new("TextLabel")
+iconText.Size = UDim2.new(1, 0, 1, 0)
+iconText.BackgroundTransparency = 1
+iconText.Text = "⚔"
+iconText.TextColor3 = Color3.fromRGB(100, 200, 100)
+iconText.TextSize = 24
+iconText.Font = Enum.Font.GothamBold
+iconText.ZIndex = 9
+iconText.Parent = iconCircle
+
+-- MAIN STATUS
+local mainStatus = Instance.new("TextLabel")
+mainStatus.Size = UDim2.new(1, -130, 0, 22)
+mainStatus.Position = UDim2.new(0, 66, 0, 10)
+mainStatus.BackgroundTransparency = 1
+mainStatus.Text = "Idle"
+mainStatus.TextColor3 = Color3.fromRGB(240, 240, 250)
+mainStatus.TextSize = 17
+mainStatus.Font = Enum.Font.GothamBold
+mainStatus.TextXAlignment = Enum.TextXAlignment.Left
+mainStatus.ZIndex = 8
+mainStatus.Parent = container
+
+-- SUB STATUS
+local subStatus = Instance.new("TextLabel")
+subStatus.Size = UDim2.new(1, -130, 0, 16)
+subStatus.Position = UDim2.new(0, 66, 0, 34)
+subStatus.BackgroundTransparency = 1
+subStatus.Text = "menunggu"
+subStatus.TextColor3 = Color3.fromRGB(140, 140, 160)
+subStatus.TextSize = 12
+subStatus.Font = Enum.Font.GothamMedium
+subStatus.TextXAlignment = Enum.TextXAlignment.Left
+subStatus.ZIndex = 8
+subStatus.Parent = container
+
+-- DOT INDICATOR (kanan)
+local dotFrame = Instance.new("Frame")
+dotFrame.Size = UDim2.new(0, 8, 0, 8)
+dotFrame.Position = UDim2.new(1, -20, 0.5, -4)
+dotFrame.BackgroundColor3 = Color3.fromRGB(100, 200, 100)
+dotFrame.BorderSizePixel = 0
+dotFrame.ZIndex = 8
+dotFrame.Parent = container
+
+local dotCorner = Instance.new("UICorner")
+dotCorner.CornerRadius = UDim.new(1, 0)
+dotCorner.Parent = dotFrame
+
+local dotGlow = Instance.new("UIStroke")
+dotGlow.Color = Color3.fromRGB(100, 200, 100)
+dotGlow.Thickness = 3
+dotGlow.Transparency = 0.5
+dotGlow.Parent = dotFrame
+
+-- PULSE ANIMATION untuk dot
+task.spawn(function()
+    while dotFrame.Parent do
+        pcall(function()
+            TweenService:Create(dotGlow, TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+                Transparency = 0.9
+            }):Play()
+        end)
+        task.wait(1)
+        pcall(function()
+            TweenService:Create(dotGlow, TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+                Transparency = 0.3
+            }):Play()
+        end)
+        task.wait(1)
+    end
+end)
+
+-- ═══════════════════════════════════════════
+--              UPDATE FUNCTION
+-- ═══════════════════════════════════════════
+local lastMain = ""
+local lastColor = nil
 
 setStatus = function(msg, color)
     pcall(function()
-        statusOverlay.Text = "⚔ " .. msg
-        if color then
-            statusOverlay.TextColor3 = color
-            soStroke.Color = color
+        msg = tostring(msg)
+        local mainText = "Idle"
+        local subText = ""
+        
+        if msg:find("Approaching") then
+            local dist = msg:match("(%d+%.%d+)") or "?"
+            local count = msg:match("|%s*(%d+)%s*enemy") or "?"
+            local wp = msg:match("wp%s*(%d+/%d+)") or ""
+            mainText = "Approaching"
+            subText = string.format("%s stud  •  %s enemy  %s", dist, count, wp)
+            color = color or Color3.fromRGB(100, 180, 255)
+        elseif msg:find("Kiting") then
+            local dist = msg:match("(%d+%.%d+)") or "?"
+            local count = msg:match("|%s*(%d+)%s*enemy") or "?"
+            mainText = "Kiting"
+            subText = string.format("%s stud  •  %s enemy  •  retreat + attack", dist, count)
+            color = color or Color3.fromRGB(255, 180, 100)
+        elseif msg:find("No enemy") then
+            mainText = "Scanning"
+            subText = "mencari musuh..."
+            color = color or Color3.fromRGB(160, 160, 180)
+        elseif msg:find("Idle") then
+            mainText = "Idle"
+            subText = "menunggu"
+            color = color or Color3.fromRGB(120, 120, 140)
+        elseif msg:find("Starting") then
+            mainText = "Starting"
+            subText = "menyiapkan..."
+            color = color or Color3.fromRGB(255, 220, 100)
+        elseif msg:find("Running") then
+            mainText = "Running"
+            subText = "auto farm aktif"
+            color = color or Color3.fromRGB(100, 220, 100)
+        else
+            mainText = msg
+            subText = ""
+        end
+        
+        -- update main text
+        if mainText ~= lastMain then
+            lastMain = mainText
+            mainStatus.Text = mainText
+        end
+        if subText then
+            subStatus.Text = subText
+        end
+        
+        -- animate colors
+        if color and color ~= lastColor then
+            lastColor = color
+            TweenService:Create(glowBar, TweenInfo.new(0.3), {BackgroundColor3 = color}):Play()
+            TweenService:Create(iconCircle, TweenInfo.new(0.3), {BackgroundColor3 = color}):Play()
+            TweenService:Create(iconStroke, TweenInfo.new(0.3), {Color = color}):Play()
+            TweenService:Create(iconText, TweenInfo.new(0.3), {TextColor3 = color}):Play()
+            TweenService:Create(dotFrame, TweenInfo.new(0.3), {BackgroundColor3 = color}):Play()
+            TweenService:Create(dotGlow, TweenInfo.new(0.3), {Color = color}):Play()
         end
     end)
 end
@@ -120,26 +299,8 @@ function AntiLag.setup()
             settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
             Lighting.GlobalShadows = false
             Lighting.FogEnd = 100000
-            Lighting.Brightness = 1
             Lighting.EnvironmentDiffuseScale = 0
             Lighting.EnvironmentSpecularScale = 0
-            Lighting.Ambient = Color3.fromRGB(128, 128, 128)
-            Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
-            for _, effect in ipairs(Lighting:GetChildren()) do
-                if effect:IsA("BlurEffect") or effect:IsA("SunRaysEffect")
-                    or effect:IsA("ColorCorrectionEffect") or effect:IsA("BloomEffect")
-                    or effect:IsA("DepthOfFieldEffect") then
-                    effect.Enabled = false
-                end
-            end
-        end)
-    end
-    if CONFIG.AntiLag_HideTerrain then
-        pcall(function()
-            workspace.Terrain.WaterWaveSize = 0
-            workspace.Terrain.WaterWaveSpeed = 0
-            workspace.Terrain.WaterReflectance = 0
-            workspace.Terrain.WaterTransparency = 1
         end)
     end
     AntiLag.processInstance(workspace)
@@ -151,9 +312,7 @@ function AntiLag.processInstance(container)
         AntiLag.cleanInstance(obj)
     end
     container.DescendantAdded:Connect(function(obj)
-        task.defer(function()
-            AntiLag.cleanInstance(obj)
-        end)
+        task.defer(function() AntiLag.cleanInstance(obj) end)
     end)
 end
 
@@ -175,54 +334,13 @@ function AntiLag.cleanInstance(obj)
                 obj.Transparency = 1
             end
         end
-        if CONFIG.AntiLag_DisableAnimations then
-            if obj:IsA("Animator") and obj.Parent then
-                local char = LocalPlayer.Character
-                if char and not obj:IsDescendantOf(char) then
-                    pcall(function() obj:Destroy() end)
-                end
-            end
-        end
-        if CONFIG.AntiLag_HideAccessories then
-            if obj:IsA("Accessory") or obj:IsA("Hat") then
-                if obj.Parent then
-                    local char = LocalPlayer.Character
-                    if char and not obj:IsDescendantOf(char) then
-                        pcall(function() obj:Destroy() end)
-                    end
-                end
-            end
-        end
-    end)
-end
-
-function AntiLag.hideOtherPlayers()
-    if not CONFIG.AntiLag_HidePlayers then return end
-    local function hideChar(char)
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") or part:IsA("Decal") then
-                part.Transparency = 1
-            end
-        end
-    end
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            hideChar(player.Character)
-        end
-    end
-    Players.PlayerAdded:Connect(function(player)
-        player.CharacterAdded:Connect(function(char)
-            task.wait(1)
-            hideChar(char)
-        end)
     end)
 end
 
 -- ═══════════════════════════════════════════
 --              ANTI AFK
 -- ═══════════════════════════════════════════
-local function setupAntiAFK()
-    if not CONFIG.AntiAFK then return end
+if CONFIG.AntiAFK then
     pcall(function()
         LocalPlayer.Idled:Connect(function()
             local VirtualUser = game:GetService("VirtualUser")
@@ -235,8 +353,7 @@ end
 -- ═══════════════════════════════════════════
 --              AUTO RECONNECT
 -- ═══════════════════════════════════════════
-local function setupAutoReconnect()
-    if not CONFIG.AutoReconnect then return end
+if CONFIG.AutoReconnect then
     pcall(function()
         game:GetService("CoreGui").RobloxPromptGui.promptOverlay.ChildAdded:Connect(function(child)
             if child.Name == "ErrorPrompt" then
@@ -288,9 +405,7 @@ end
 local function applyWalkSpeed()
     if not CONFIG.UseWalkSpeed then return end
     if State.Humanoid then
-        pcall(function()
-            State.Humanoid.WalkSpeed = CONFIG.WalkSpeed
-        end)
+        pcall(function() State.Humanoid.WalkSpeed = CONFIG.WalkSpeed end)
     end
 end
 
@@ -313,14 +428,8 @@ local function setupCharacter(char)
     State.Character = char
     State.Humanoid = char:WaitForChild("Humanoid")
     State.RootPart = char:WaitForChild("HumanoidRootPart")
-    
-    if State.OriginalWalkSpeed == nil and State.Humanoid then
-        State.OriginalWalkSpeed = State.Humanoid.WalkSpeed
-    end
-    
     task.wait(1)
     applyWalkSpeed()
-    if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
 end
 
 if LocalPlayer.Character then setupCharacter(LocalPlayer.Character) end
@@ -418,7 +527,7 @@ local function findNearestEnemy()
 end
 
 -- ═══════════════════════════════════════════
---              PATH (V42 STYLE)
+--              PATHFINDER
 -- ═══════════════════════════════════════════
 local function resetPath()
     State.PathWaypoints = nil
@@ -428,10 +537,9 @@ local function resetPath()
     State.LastMoveToPos = nil
 end
 
-local function requestPath(targetPos, goalType)
+local function requestPath(targetPos, goalType, forceNow)
     if not State.Humanoid or not State.RootPart then return end
     if not targetPos then return end
-    if State.PathBusy then return end
     
     local needRecompute = false
     if not State.PathWaypoints then needRecompute = true
@@ -440,28 +548,53 @@ local function requestPath(targetPos, goalType)
     elseif State.PathTargetPos and (targetPos - State.PathTargetPos).Magnitude > CONFIG.TargetMoveThreshold then needRecompute = true
     end
     
-    if not needRecompute then return end
+    if not needRecompute and not forceNow then return end
+    if State.PathBusy then return end
     
+    State.PathTargetPos = targetPos
+    State.PathGoalType = goalType
     State.PathBusy = true
+    State.PathRequestId = State.PathRequestId + 1
+    local myRequestId = State.PathRequestId
+    
+    local myPos = State.RootPart.Position
+    
     task.spawn(function()
-        local myPos = State.RootPart.Position
         local path = PathfindingService:CreatePath({
-            AgentRadius = 3, AgentHeight = 5, AgentCanJump = true,
-            AgentJumpHeight = 10, AgentMaxSlope = 45,
+            AgentRadius = 2,
+            AgentHeight = 5,
+            AgentCanJump = true,
+            AgentJumpHeight = 12,
+            AgentMaxSlope = 60,
+            Costs = { Water = 50 },
         })
-        local ok = pcall(function() path:ComputeAsync(myPos, targetPos) end)
+        
+        local ok = pcall(function()
+            path:ComputeAsync(myPos, targetPos)
+        end)
+        
+        if myRequestId ~= State.PathRequestId then return end
         
         if ok and path.Status == Enum.PathStatus.Success then
-            State.PathWaypoints = path:GetWaypoints()
+            local waypoints = path:GetWaypoints()
+            
+            if CONFIG.WaypointSkip > 0 and #waypoints > 2 + CONFIG.WaypointSkip then
+                local newWaypoints = {}
+                table.insert(newWaypoints, waypoints[1])
+                for i = 2 + CONFIG.WaypointSkip, #waypoints, CONFIG.WaypointSkip do
+                    table.insert(newWaypoints, waypoints[i])
+                end
+                if newWaypoints[#newWaypoints] ~= waypoints[#waypoints] then
+                    table.insert(newWaypoints, waypoints[#waypoints])
+                end
+                waypoints = newWaypoints
+            end
+            
+            State.PathWaypoints = waypoints
             State.PathIndex = 2
-            State.PathTargetPos = targetPos
-            State.PathGoalType = goalType
             State.LastMoveToPos = nil
         else
             State.PathWaypoints = nil
-            State.PathTargetPos = targetPos
-            State.PathGoalType = goalType
-            State.LastMoveToPos = nil
         end
         State.PathBusy = false
     end)
@@ -469,6 +602,7 @@ end
 
 local function followPath()
     if not State.Humanoid or not State.RootPart then return end
+    
     if not State.PathWaypoints then
         if State.PathTargetPos then
             if not State.LastMoveToPos 
@@ -486,19 +620,26 @@ local function followPath()
     local wp = State.PathWaypoints[State.PathIndex]
     local distToWp = (myPos - wp.Position).Magnitude
     
-    if distToWp <= CONFIG.WaypointReached then
+    local advanced = false
+    while distToWp <= CONFIG.WaypointReached and State.PathIndex < #State.PathWaypoints do
         State.PathIndex = State.PathIndex + 1
+        wp = State.PathWaypoints[State.PathIndex]
+        distToWp = (myPos - wp.Position).Magnitude
+        advanced = true
+    end
+    
+    if advanced then
         State.LastMoveToPos = nil
-        return
     end
     
     if not State.LastMoveToPos 
         or (State.LastMoveToPos - wp.Position).Magnitude > 0.5 then
         State.Humanoid:MoveTo(wp.Position)
         State.LastMoveToPos = wp.Position
-        if wp.Action == Enum.PathWaypointAction.Jump then
-            State.Humanoid.Jump = true
-        end
+    end
+    
+    if wp.Action == Enum.PathWaypointAction.Jump then
+        State.Humanoid.Jump = true
     end
 end
 
@@ -531,9 +672,11 @@ local function attackEnemy(enemy)
     local now = tick()
     if now - State.LastAttack < CONFIG.AttackCooldown then return false end
     State.LastAttack = now
-    pressQ()
-    task.wait(0.08)
-    pressE()
+    task.spawn(function()
+        pressQ()
+        task.wait(0.08)
+        pressE()
+    end)
     return true
 end
 
@@ -546,17 +689,14 @@ local function mainLoop()
         if not State.Character or not State.Character.Parent then task.wait(0.5) continue end
         if State.Humanoid.Health <= 0 then task.wait(1) continue end
         
-        -- WalkSpeed re-apply
         if CONFIG.UseWalkSpeed and State.Humanoid.WalkSpeed ~= CONFIG.WalkSpeed then
             applyWalkSpeed()
         end
         
-        -- Auto upgrade
         if CONFIG.AutoUpgrade and (tick() - State.LastUpgrade) >= CONFIG.UpgradeInterval then 
             upgradeSpell() 
         end
 
-        -- Shiftlock auto ON
         local sl = LocalPlayer:FindFirstChild("shiftlockMobile")
         if sl and sl.Value == false then setShiftlock(true) end
 
@@ -571,23 +711,24 @@ local function mainLoop()
                 State.LockedEnemyPos = enemyPos
                 
                 if dist > CONFIG.KeepDistance then
-                    -- APPROACH
-                    setStatus(
-                        string.format("Approaching (%.1f) | %d enemy", dist, count),
-                        Color3.fromRGB(100, 200, 255)
-                    )
                     requestPath(enemyPos, "approach")
                     followPath()
                     attackEnemy(enemy)
+                    
+                    setStatus(
+                        string.format("Approaching (%.1f) | %d enemy | wp %d/%d", 
+                            dist, count, State.PathIndex, 
+                            State.PathWaypoints and #State.PathWaypoints or 0),
+                        Color3.fromRGB(100, 180, 255)
+                    )
                 else
-                    -- RETREAT / KITE
                     setStatus(
                         string.format("Kiting (%.1f) | %d enemy", dist, count),
-                        Color3.fromRGB(255, 200, 100)
+                        Color3.fromRGB(255, 180, 100)
                     )
                     local safePoint = findSafePointAroundEnemy(enemyPos, myPos)
                     if safePoint then
-                        requestPath(safePoint, "retreat")
+                        requestPath(safePoint, "retreat", true)
                         followPath()
                     end
                     attackEnemy(enemy)
@@ -596,7 +737,7 @@ local function mainLoop()
         else
             State.LockedEnemyPos = nil
             resetPath()
-            setStatus("No enemy | scanning...", Color3.fromRGB(150, 150, 150))
+            setStatus("No enemy | scanning...", Color3.fromRGB(160, 160, 180))
         end
     end
 end
@@ -606,16 +747,13 @@ end
 -- ═══════════════════════════════════════════
 task.spawn(function()
     AntiLag.setup()
-    if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
-    setupAntiAFK()
-    setupAutoReconnect()
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v51 - LOADED    ║")
-    print("║   Pathfinder v42 + Anti Lag + UI   ║")
+    print("║   AUTO FARM KAITUN v54 - LOADED    ║")
+    print("║   Smooth Path + Gradient HUD       ║")
     print("╚════════════════════════════════════╝")
     
-    setStatus("Starting...", Color3.fromRGB(200, 200, 100))
+    setStatus("Starting...", Color3.fromRGB(255, 220, 100))
     
     State.Running = true
     task.wait(3)
@@ -631,7 +769,7 @@ task.spawn(function()
     applyWalkSpeed()
     setShiftlock(true)
     
-    setStatus("Running", Color3.fromRGB(100, 255, 100))
+    setStatus("Running", Color3.fromRGB(100, 220, 100))
     print("[KAITUN] Started auto farm...")
     mainLoop()
 end)
