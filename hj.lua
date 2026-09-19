@@ -20,11 +20,11 @@ local CONFIG = {
     AttackDistance = 50,
     KeepDistance = 30,
     AttackCooldown = 0.5,
-    WalkSpeed = 25,
+    WalkSpeed = 20,
     AutoUpgrade = true,
     UseShiftlock = true,
     -- anti-stuck (jarang perlu diubah)
-    StuckTimeout = 0.7,
+    StuckTimeout = 2,
     UnstickAttempts = 3,
 }
 
