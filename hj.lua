@@ -1,6 +1,6 @@
 -- ============================================
--- AUTO FARM DUNGEON - MOBILE EDITION (v6)
--- Direct enemyFolder scan + Kiting (jaga jarak)
+-- AUTO FARM DUNGEON - MOBILE EDITION (v7)
+-- Shiftlock (AlignOrientation) + Robust enemy detect
 -- ============================================
 
 local Players = game:GetService("Players")
@@ -17,15 +17,16 @@ local Camera = workspace.CurrentCamera
 -- ============ KONFIGURASI ============
 local CONFIG = {
     AttackRange = 30,
-    WalkDistance = 15,
-    MinDistance = 8,          -- jarak minimum kalo musuh deket → lari
-    KiteDistance = 20,         -- jarak aman setelah kabur
+    WalkDistance = 20,
+    MinDistance = 10,
+    KiteDistance = 20,
     AttackCooldown = 0.5,
     SkillName = "spellPower",
     AutoUpgrade = true,
     UpgradeInterval = 3,
     FaceEnemy = true,
-    Kiting = true,             -- aktifkan fitur kabur
+    Kiting = true,
+    LockCamera = true,
 }
 
 local State = {
@@ -35,11 +36,14 @@ local State = {
     RootPart = nil,
     LastAttack = 0,
     LastUpgrade = 0,
+    EnemyFolder = nil,
+    Orientation = nil,
+    OrientationAttachment = nil,
 }
 
 setStatus = function() end
 
--- ============ KEYPRESS (Hex) ============
+-- ============ KEYPRESS ============
 local KEY_Q = 0x51
 local KEY_E = 0x45
 
@@ -55,11 +59,59 @@ local function pressE()
     pcall(function() keyrelease(KEY_E) end)
 end
 
+-- ============ SHIFTLOCK SETUP (AlignOrientation) ============
+local function setupOrientation()
+    if not State.RootPart then return end
+    
+    -- hapus yang lama
+    if State.Orientation then State.Orientation:Destroy() end
+    if State.OrientationAttachment then State.OrientationAttachment:Destroy() end
+    
+    -- auto rotate OFF biar AO yang atur
+    if State.Humanoid then
+        State.Humanoid.AutoRotate = false
+    end
+    
+    local attach = Instance.new("Attachment")
+    attach.Name = "EnemyLockAttach"
+    attach.Parent = State.RootPart
+    State.OrientationAttachment = attach
+    
+    local ao = Instance.new("AlignOrientation")
+    ao.Name = "EnemyLockAO"
+    ao.Attachment0 = attach
+    ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
+    ao.MaxTorque = 100000
+    ao.MaxAngularVelocity = 100000
+    ao.Responsiveness = 30
+    ao.Parent = State.RootPart
+    State.Orientation = ao
+end
+
+local function lockToEnemy(enemy)
+    if not CONFIG.FaceEnemy then return end
+    if not State.Orientation or not State.RootPart then return end
+    
+    local _, hrp = getHumanoidAndHRP(enemy)
+    if not hrp then return end
+    
+    -- target posisi horizontal (y = my y) biar karakter gak miring
+    local myPos = State.RootPart.Position
+    local enemyPos = hrp.Position
+    local targetPos = Vector3.new(enemyPos.X, myPos.Y, enemyPos.Z)
+    
+    -- CFrame lookAt → AO akan smooth rotate karakter ke sini
+    State.Orientation.CFrame = CFrame.lookAt(myPos, targetPos)
+end
+
 -- ============ CHARACTER SETUP ============
 local function setupCharacter(char)
     State.Character = char
     State.Humanoid = char:WaitForChild("Humanoid")
     State.RootPart = char:WaitForChild("HumanoidRootPart")
+    
+    task.wait(0.5)
+    setupOrientation()
 end
 
 if LocalPlayer.Character then
@@ -89,29 +141,57 @@ local function upgradeSpell()
     end
 end
 
--- ============ ENEMY FOLDER (DIRECT SCAN) ============
+-- ============ ENEMY FOLDER (DIRECT SCAN + CACHE) ============
 local function findEnemyFolder()
-    -- Scan seluruh workspace cari folder bernama "enemyFolder"
+    -- pakai cache kalau masih valid
+    if State.EnemyFolder and State.EnemyFolder.Parent then
+        return State.EnemyFolder
+    end
+    
+    -- scan seluruh workspace
     for _, obj in ipairs(workspace:GetDescendants()) do
         if (obj:IsA("Folder") or obj:IsA("Model")) 
             and obj.Name:lower():find("enemyfolder") then
+            State.EnemyFolder = obj
             return obj
         end
     end
     return nil
 end
 
+-- ============ HUMANOID & HRP ROBUST ============
 local function getHumanoidAndHRP(enemy)
+    if not enemy or not enemy.Parent then return nil, nil end
+    
     local hum = enemy:FindFirstChildOfClass("Humanoid") 
         or enemy:FindFirstChildWhichIsA("Humanoid", true)
+    if not hum then return nil, nil end
+    
+    -- cek health (fallback ke attribute)
+    local hp = hum.Health
+    local attrHp = enemy:GetAttribute("Health") 
+        or enemy:GetAttribute("health")
+        or hum:GetAttribute("Health")
+    if attrHp then hp = attrHp end
+    
+    if not hp or hp <= 0 then return nil, nil end
+    
+    -- cek state Dead
+    local ok, state = pcall(function() return hum:GetState() end)
+    if ok and state == Enum.HumanoidStateType.Dead then return nil, nil end
+    
+    -- cari HRP
     local hrp = enemy:FindFirstChild("HumanoidRootPart")
         or enemy:FindFirstChild("HumanoidRootPart", true)
+        or enemy.PrimaryPart
         or enemy:FindFirstChild("Torso")
         or enemy:FindFirstChild("Torso", true)
         or enemy:FindFirstChild("UpperTorso")
         or enemy:FindFirstChild("UpperTorso", true)
         or enemy:FindFirstChild("Head")
         or enemy:FindFirstChild("Head", true)
+    
+    if not hrp then return nil, nil end
     return hum, hrp
 end
 
@@ -125,10 +205,11 @@ local function findNearestEnemy()
 
     local nearest, nearestDist = nil, math.huge
     local count = 0
+    
     for _, enemy in ipairs(folder:GetChildren()) do
         if enemy:IsA("Model") or enemy:IsA("Folder") then
             local hum, hrp = getHumanoidAndHRP(enemy)
-            if hum and hrp and hum.Health > 0 then
+            if hum and hrp then
                 count = count + 1
                 local dist = (hrp.Position - State.RootPart.Position).Magnitude
                 if dist < nearestDist then
@@ -138,36 +219,27 @@ local function findNearestEnemy()
             end
         end
     end
+    
+    -- refresh folder cache kalau 0 enemy (mungkin ganti room)
+    if count == 0 then
+        State.EnemyFolder = nil
+    end
+    
     return nearest, count
 end
 
--- ============ FACE ENEMY ============
-local function faceEnemy(enemy)
-    if not CONFIG.FaceEnemy then return end
-    if not enemy or not State.RootPart then return end
-    local _, hrp = getHumanoidAndHRP(enemy)
-    if not hrp then return end
-    
-    local myPos = State.RootPart.Position
-    local targetPos = Vector3.new(hrp.Position.X, myPos.Y, hrp.Position.Z)
-    State.RootPart.CFrame = CFrame.new(myPos, targetPos)
-end
-
--- ============ KITING (kabur kalau musuh deket) ============
+-- ============ KITING ============
 local function kiteAway(enemy)
     if not State.Humanoid or not State.RootPart then return end
     local _, hrp = getHumanoidAndHRP(enemy)
     if not hrp then return end
     
-    -- hitung arah menjauh dari enemy
     local myPos = State.RootPart.Position
-    local enemyPos = hrp.Position
-    local awayDir = (myPos - enemyPos)
+    local awayDir = (myPos - hrp.Position)
     awayDir = Vector3.new(awayDir.X, 0, awayDir.Z).Unit
     
     local targetPos = myPos + awayDir * CONFIG.KiteDistance
     
-    -- pakai Pathfinder biar gak nabrak tembok
     local path = PathfindingService:CreatePath({
         AgentRadius = 3,
         AgentHeight = 5,
@@ -189,7 +261,6 @@ local function kiteAway(enemy)
             if wp.Action == Enum.PathWaypointAction.Jump then
                 State.Humanoid.Jump = true
             end
-            -- stop kalau udah cukup jauh
             local _, curHrp = getHumanoidAndHRP(enemy)
             if curHrp and State.RootPart then
                 local d = (curHrp.Position - State.RootPart.Position).Magnitude
@@ -208,13 +279,13 @@ local function attackEnemy(enemy)
     if now - State.LastAttack < CONFIG.AttackCooldown then return end
     State.LastAttack = now
 
-    faceEnemy(enemy)
+    lockToEnemy(enemy)
     pressQ()
     task.wait(0.08)
     pressE()
 end
 
--- ============ PATHFINDER WALK ============
+-- ============ WALK ============
 local function walkToEnemy(enemy)
     if not enemy or not State.Humanoid or not State.RootPart then return end
     local _, hrp = getHumanoidAndHRP(enemy)
@@ -245,13 +316,11 @@ local function walkToEnemy(enemy)
         for i, wp in ipairs(waypoints) do
             if not State.Running then return end
             if i == 1 then continue end
-
             local _, curHrp = getHumanoidAndHRP(enemy)
             if curHrp and State.RootPart then
                 local d = (curHrp.Position - State.RootPart.Position).Magnitude
                 if d <= CONFIG.WalkDistance then break end
             end
-
             State.Humanoid:MoveTo(wp.Position)
             if wp.Action == Enum.PathWaypointAction.Jump then
                 State.Humanoid.Jump = true
@@ -262,6 +331,28 @@ local function walkToEnemy(enemy)
         State.Humanoid:MoveTo(hrp.Position)
     end
 end
+
+-- ============ CAMERA LOCK ============
+local function updateCamera()
+    if not CONFIG.LockCamera then return end
+    if not State.Running then return end
+    if not State.RootPart then return end
+    
+    local enemy = State.CurrentEnemy
+    if not enemy then return end
+    
+    local _, hrp = getHumanoidAndHRP(enemy)
+    if not hrp then return end
+    
+    local camPos = Camera.CFrame.Position
+    Camera.CFrame = CFrame.new(camPos, hrp.Position)
+end
+
+RunService.RenderStepped:Connect(function()
+    if State.Running and CONFIG.LockCamera then
+        pcall(updateCamera)
+    end
+end)
 
 -- ============ MAIN LOOP ============
 local function mainLoop()
@@ -285,29 +376,27 @@ local function mainLoop()
 
         -- FIND ENEMY
         local enemy, count = findNearestEnemy()
+        State.CurrentEnemy = enemy
+        
         if enemy then
             local _, ehrp = getHumanoidAndHRP(enemy)
             if ehrp then
                 local dist = (ehrp.Position - State.RootPart.Position).Magnitude
 
                 if CONFIG.Kiting and dist <= CONFIG.MinDistance then
-                    -- musuh kelewat deket → kabur sambil attack
                     setStatus(string.format("Kiting! (%.1f) | %d enemies", dist, count or 0))
-                    task.spawn(function()
-                        attackEnemy(enemy)
-                    end)
+                    task.spawn(function() attackEnemy(enemy) end)
                     kiteAway(enemy)
                 elseif dist <= CONFIG.AttackRange then
-                    -- dalam range attack
                     attackEnemy(enemy)
                     setStatus(string.format("Attacking (%.1f) | %d enemies", dist, count or 0))
                 else
-                    -- masih jauh
                     walkToEnemy(enemy)
                     setStatus(string.format("Walking (%.1f) | %d enemies", dist, count or 0))
                 end
             end
         else
+            State.CurrentEnemy = nil
             setStatus("Scanning... 0 enemies")
         end
     end
@@ -328,7 +417,6 @@ local function createUI()
     screenGui.IgnoreGuiInset = true
     screenGui.Parent = CoreGui
 
-    -- FLOATING BUTTON
     local floatBtn = Instance.new("TextButton")
     floatBtn.Name = "FloatBtn"
     floatBtn.Size = UDim2.new(0, 60, 0, 60)
@@ -352,11 +440,10 @@ local function createUI()
     fbStroke.Thickness = 2
     fbStroke.Parent = floatBtn
 
-    -- MAIN FRAME
     local main = Instance.new("Frame")
     main.Name = "Main"
-    main.Size = UDim2.new(0, 300, 0, 560)
-    main.Position = UDim2.new(0.5, -150, 0.5, -280)
+    main.Size = UDim2.new(0, 300, 0, 580)
+    main.Position = UDim2.new(0.5, -150, 0.5, -290)
     main.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
     main.BorderSizePixel = 0
     main.Active = true
@@ -373,7 +460,6 @@ local function createUI()
     mainStroke.Thickness = 2
     mainStroke.Parent = main
 
-    -- TITLE BAR
     local title = Instance.new("Frame")
     title.Size = UDim2.new(1, 0, 0, 45)
     title.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
@@ -395,7 +481,7 @@ local function createUI()
     titleText.Size = UDim2.new(1, -100, 1, 0)
     titleText.Position = UDim2.new(0, 15, 0, 0)
     titleText.BackgroundTransparency = 1
-    titleText.Text = "⚔ AUTO FARM v6"
+    titleText.Text = "⚔ AUTO FARM v7"
     titleText.TextColor3 = Color3.fromRGB(200, 220, 255)
     titleText.TextSize = 17
     titleText.Font = Enum.Font.GothamBold
@@ -422,7 +508,6 @@ local function createUI()
         floatBtn.Visible = true
     end)
 
-    -- SCROLL
     local scroll = Instance.new("ScrollingFrame")
     scroll.Size = UDim2.new(1, -20, 1, -60)
     scroll.Position = UDim2.new(0, 10, 0, 50)
@@ -539,8 +624,17 @@ local function createUI()
     createInput("Skill Name", CONFIG.SkillName, 6, function(v) CONFIG.SkillName = v end)
     createInput("Upgrade Interval", CONFIG.UpgradeInterval, 7, function(v) CONFIG.UpgradeInterval = v end)
     createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 8, function(v) CONFIG.AutoUpgrade = v end)
-    createToggle("Face Enemy", CONFIG.FaceEnemy, 9, function(v) CONFIG.FaceEnemy = v end)
+    createToggle("Face Enemy", CONFIG.FaceEnemy, 9, function(v) 
+        CONFIG.FaceEnemy = v
+        if not v and State.Orientation then
+            State.Orientation:Destroy()
+            State.Orientation = nil
+        elseif v and State.RootPart then
+            setupOrientation()
+        end
+    end)
     createToggle("Kiting", CONFIG.Kiting, 10, function(v) CONFIG.Kiting = v end)
+    createToggle("Lock Camera", CONFIG.LockCamera, 11, function(v) CONFIG.LockCamera = v end)
 
     local startBtn = Instance.new("TextButton")
     startBtn.Size = UDim2.new(1, 0, 0, 55)
@@ -550,7 +644,7 @@ local function createUI()
     startBtn.TextSize = 17
     startBtn.Font = Enum.Font.GothamBold
     startBtn.BorderSizePixel = 0
-    startBtn.LayoutOrder = 11
+    startBtn.LayoutOrder = 12
     startBtn.Parent = scroll
 
     local startCorner = Instance.new("UICorner")
@@ -565,7 +659,7 @@ local function createUI()
     statusLbl.TextSize = 13
     statusLbl.Font = Enum.Font.GothamMedium
     statusLbl.BorderSizePixel = 0
-    statusLbl.LayoutOrder = 12
+    statusLbl.LayoutOrder = 13
     statusLbl.Parent = scroll
 
     local statusCorner = Instance.new("UICorner")
@@ -575,11 +669,11 @@ local function createUI()
     local footer = Instance.new("TextLabel")
     footer.Size = UDim2.new(1, 0, 0, 20)
     footer.BackgroundTransparency = 1
-    footer.Text = "Q (0x51) + E (0x45) | Kite mode"
+    footer.Text = "Shiftlock v7 | Q+E | Kite mode"
     footer.TextColor3 = Color3.fromRGB(120, 120, 130)
     footer.TextSize = 11
     footer.Font = Enum.Font.Gotham
-    footer.LayoutOrder = 13
+    footer.LayoutOrder = 14
     footer.Parent = scroll
 
     setStatus = function(msg)
@@ -599,6 +693,9 @@ local function createUI()
             startBtn.Text = "▶  START FARM"
             startBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
             floatBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
+            -- restore rotation
+            if State.Humanoid then State.Humanoid.AutoRotate = true end
+            if State.Orientation then State.Orientation:Destroy() State.Orientation = nil end
             setStatus("Stopped")
         else
             State.Running = true
@@ -606,6 +703,8 @@ local function createUI()
             startBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
             floatBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
             setStatus("Starting...")
+
+            if State.RootPart then setupOrientation() end
 
             task.spawn(function()
                 startGame()
@@ -625,4 +724,4 @@ end
 
 -- ============ INIT ============
 createUI()
-print("[AutoFarm Mobile v6] Loaded. Tap ⚔ untuk buka UI")
+print("[AutoFarm Mobile v7] Loaded")
