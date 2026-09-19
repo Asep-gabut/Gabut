@@ -26,7 +26,7 @@ local CONFIG = {
     UpgradeInterval = 3,
     UseShiftlock = true,
     StuckTimeout = 1.0,
-    PathRecomputeDelay = 1.0,
+    PathRecomputeDelay = 0.01,
     FolderScanInterval = 2,
 }
 
