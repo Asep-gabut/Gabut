@@ -1,6 +1,6 @@
 -- ============================================
--- AUTO FARM DUNGEON - MOBILE EDITION (v24)
--- v18 base - no AO, kite pakai Move() mundur
+-- AUTO FARM DUNGEON - MOBILE EDITION (v26)
+-- Face pakai MoveTo + WalkSpeed trick, kite pakai pathfinder
 -- ============================================
 
 local Players = game:GetService("Players")
@@ -16,7 +16,7 @@ local CONFIG = {
     KeepDistance = 30,
     AttackCooldown = 0.5,
     AutoUpgrade = true,
-    KiteSpeed = 1.2,
+    FaceEnemy = true,
 }
 
 local State = {
@@ -34,6 +34,7 @@ local State = {
     PathTargetPos = nil,
     LastMoveToPos = nil,
     LastZone = nil,
+    OriginalWalkSpeed = nil,   -- simpan walk speed awal
 }
 
 setStatus = function() end
@@ -59,6 +60,9 @@ local function setupCharacter(char)
     State.Character = char
     State.Humanoid = char:WaitForChild("Humanoid")
     State.RootPart = char:WaitForChild("HumanoidRootPart")
+    if State.OriginalWalkSpeed == nil and State.Humanoid then
+        State.OriginalWalkSpeed = State.Humanoid.WalkSpeed
+    end
 end
 
 if LocalPlayer.Character then setupCharacter(LocalPlayer.Character) end
@@ -160,6 +164,27 @@ local function findNearestEnemy()
     return nearest, totalCount, roomInfo
 end
 
+-- ============ FACE ENEMY (trick: MoveTo + WalkSpeed 0) ⭐ ============
+local function faceEnemy(enemy)
+    if not CONFIG.FaceEnemy then return end
+    if not enemy or not State.RootPart or not State.Humanoid then return end
+    local _, hrp = getHumanoidAndHRP(enemy)
+    if not hrp then return end
+    
+    -- Simpan WalkSpeed saat ini
+    local currentWS = State.Humanoid.WalkSpeed
+    local baseWS = State.OriginalWalkSpeed or 16
+    
+    -- Set WalkSpeed 0 → karakter gak gerak
+    State.Humanoid.WalkSpeed = 0
+    -- MoveTo musuh → karakter internal-rotate hadap musuh
+    State.Humanoid:MoveTo(hrp.Position)
+    -- kasih waktu 1 frame untuk rotate
+    task.wait(0.03)
+    -- balikin kecepatan
+    State.Humanoid.WalkSpeed = baseWS
+end
+
 -- ============ PATH RESET ============
 local function resetPath()
     State.PathWaypoints = nil
@@ -169,23 +194,41 @@ local function resetPath()
     State.LastMoveToPos = nil
 end
 
--- ============ KITING (MOVE MUNDUR, KAYA v18) ⭐ ============
+-- ============ KITING pakai Pathfinder ============
 local function kiteAway(enemy)
     if not State.Humanoid or not State.RootPart then return end
     local _, hrp = getHumanoidAndHRP(enemy)
     if not hrp then return end
     
     local myPos = State.RootPart.Position
-    local awayDir = myPos - hrp.Position
+    local enemyPos = hrp.Position
+    
+    local awayDir = myPos - enemyPos
     awayDir = Vector3.new(awayDir.X, 0, awayDir.Z)
     if awayDir.Magnitude < 0.1 then return end
     awayDir = awayDir.Unit
     
-    -- gerak mundur tanpa rotate karakter
-    State.Humanoid:Move(awayDir * CONFIG.KiteSpeed)
+    local targetPos = myPos + awayDir * (CONFIG.KeepDistance * 0.5)
+    
+    local path = PathfindingService:CreatePath({
+        AgentRadius = 3, AgentHeight = 5, AgentCanJump = true,
+        AgentJumpHeight = 10, AgentMaxSlope = 45,
+    })
+    local ok = pcall(function()
+        path:ComputeAsync(myPos, targetPos)
+    end)
+    
+    if ok and path.Status == Enum.PathStatus.Success then
+        local wps = path:GetWaypoints()
+        if #wps >= 2 then
+            State.Humanoid:MoveTo(wps[2].Position)
+        end
+    else
+        State.Humanoid:MoveTo(targetPos)
+    end
 end
 
--- ============ WALK (kaya v18) ============
+-- ============ WALK (approach) ============
 local function walkToEnemy(enemy)
     if not State.Humanoid or not State.RootPart then return end
     local _, hrp = getHumanoidAndHRP(enemy)
@@ -254,6 +297,11 @@ local function attackEnemy(enemy)
     local now = tick()
     if now - State.LastAttack < CONFIG.AttackCooldown then return end
     State.LastAttack = now
+    
+    -- face dulu (rotate pakai trick MoveTo+WS0)
+    faceEnemy(enemy)
+    task.wait(0.02)
+    
     pressQ()
     task.wait(0.08)
     pressE()
@@ -315,6 +363,8 @@ local function mainLoop()
                     State.LastZone = "Attack"
                     attackEnemy(enemy)
                     resetPath()
+                    -- stop gerak
+                    State.Humanoid:MoveTo(State.RootPart.Position)
                     setStatus(string.format("Attacking (%.1f) | %d%s", dist, count, roomStr))
                 elseif shouldApproach then
                     State.LastZone = "Approach"
@@ -560,8 +610,8 @@ local function createUI()
     createInput("Attack Distance", CONFIG.AttackDistance, 1, function(v) CONFIG.AttackDistance = v end)
     createInput("Keep Distance", CONFIG.KeepDistance, 2, function(v) CONFIG.KeepDistance = v end)
     createInput("Attack Cooldown", CONFIG.AttackCooldown, 3, function(v) CONFIG.AttackCooldown = v end)
-    createInput("Kite Speed", CONFIG.KiteSpeed, 4, function(v) CONFIG.KiteSpeed = v end)
-    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 5, function(v) CONFIG.AutoUpgrade = v end)
+    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 4, function(v) CONFIG.AutoUpgrade = v end)
+    createToggle("Face Enemy", CONFIG.FaceEnemy, 5, function(v) CONFIG.FaceEnemy = v end)
 
     local startBtn = Instance.new("TextButton")
     startBtn.Size = UDim2.new(1, 0, 0, 55)
@@ -581,7 +631,7 @@ local function createUI()
     local footer = Instance.new("TextLabel")
     footer.Size = UDim2.new(1, 0, 0, 20)
     footer.BackgroundTransparency = 1
-    footer.Text = "v24 - no AO, kite mundur"
+    footer.Text = "v26 - MoveTo face trick"
     footer.TextColor3 = Color3.fromRGB(120, 120, 130)
     footer.TextSize = 11
     footer.Font = Enum.Font.Gotham
@@ -622,4 +672,4 @@ local function createUI()
 end
 
 createUI()
-print("[AutoFarm Mobile v24] Loaded - no AO")
+print("[AutoFarm Mobile v26] Loaded")
