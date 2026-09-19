@@ -1,6 +1,6 @@
 -- ============================================
--- AUTO FARM DUNGEON - MOBILE EDITION (v14)
--- No face enemy + Status overlay + Settings-only GUI
+-- AUTO FARM DUNGEON - MOBILE EDITION (v16)
+-- Simple mode: anti-nyangkut tembok
 -- ============================================
 
 local Players = game:GetService("Players")
@@ -14,20 +14,18 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
--- ============ KONFIGURASI ============
+-- ============ KONFIGURASI (SIMPLE) ============
 local CONFIG = {
+    -- basic
     AttackDistance = 50,
     KeepDistance = 30,
-    DistanceTolerance = 3,
     AttackCooldown = 0.5,
     WalkSpeed = 25,
-    SkillName = "spellPower",
     AutoUpgrade = true,
-    UpgradeInterval = 3,
     UseShiftlock = true,
-    StuckTimeout = 1.0,
-    PathRecomputeDelay = 0.01,
-    FolderScanInterval = 2,
+    -- anti-stuck (jarang perlu diubah)
+    StuckTimeout = 0.7,
+    UnstickAttempts = 3,
 }
 
 local State = {
@@ -37,15 +35,16 @@ local State = {
     RootPart = nil,
     LastAttack = 0,
     LastUpgrade = 0,
-    LastPathCompute = 0,
     LastPos = nil,
     StuckTime = 0,
+    UnstickCount = 0,
     EnemyFolders = {},
     LastFolderScan = 0,
-    CurrentEnemy = nil,
-    ShiftlockSaved = nil,
-    WalkSpeedSaved = nil,
-    CurrentRoom = nil,
+    -- path
+    PathWaypoints = nil,
+    PathIndex = 1,
+    PathEnemyRef = nil,
+    PathTargetPos = nil,
 }
 
 setStatus = function() end
@@ -66,20 +65,14 @@ local function pressE()
     pcall(function() keyrelease(KEY_E) end)
 end
 
--- ============ CHARACTER SETUP ============
+-- ============ CHARACTER ============
 local function setupCharacter(char)
     State.Character = char
     State.Humanoid = char:WaitForChild("Humanoid")
     State.RootPart = char:WaitForChild("HumanoidRootPart")
-    
-    if State.WalkSpeedSaved == nil and State.Humanoid then
-        State.WalkSpeedSaved = State.Humanoid.WalkSpeed
-    end
 end
 
-if LocalPlayer.Character then
-    setupCharacter(LocalPlayer.Character)
-end
+if LocalPlayer.Character then setupCharacter(LocalPlayer.Character) end
 LocalPlayer.CharacterAdded:Connect(setupCharacter)
 
 -- ============ WALKSPEED ============
@@ -89,39 +82,16 @@ local function applyWalkSpeed()
     end
 end
 
-local function restoreWalkSpeed()
-    if State.Humanoid and State.WalkSpeedSaved then
-        pcall(function() State.Humanoid.WalkSpeed = State.WalkSpeedSaved end)
-    end
-end
-
 -- ============ SHIFTLOCK ============
 local function setShiftlock(enabled)
     pcall(function()
         local sl = LocalPlayer:FindFirstChild("shiftlockMobile")
         if not sl then
             for _, obj in ipairs(LocalPlayer:GetDescendants()) do
-                if obj.Name:lower():find("shiftlock") then
-                    sl = obj break
-                end
+                if obj.Name:lower():find("shiftlock") then sl = obj break end
             end
         end
-        if sl then
-            if State.ShiftlockSaved == nil then
-                State.ShiftlockSaved = sl.Value
-            end
-            sl.Value = enabled
-        end
-    end)
-end
-
-local function enableShiftlock() setShiftlock(true) end
-local function restoreShiftlock()
-    pcall(function()
-        local sl = LocalPlayer:FindFirstChild("shiftlockMobile")
-        if sl and State.ShiftlockSaved ~= nil then
-            sl.Value = State.ShiftlockSaved
-        end
+        if sl then sl.Value = enabled end
     end)
 end
 
@@ -130,10 +100,7 @@ local function startGame()
     local remotes = ReplicatedStorage:FindFirstChild("remotes")
     if not remotes then return end
     local change = remotes:FindFirstChild("changeStartValue")
-    if change then
-        change:FireServer()
-        setStatus("Game started")
-    end
+    if change then change:FireServer() end
 end
 
 local function upgradeSpell()
@@ -142,12 +109,12 @@ local function upgradeSpell()
     if not remotes then return end
     local spend = remotes:FindFirstChild("spendSkillPoint")
     if spend then
-        spend:FireServer(CONFIG.SkillName, 1)
+        spend:FireServer("spellPower", 1)
         State.LastUpgrade = tick()
     end
 end
 
--- ============ ENEMY FOLDER SCANNER ============
+-- ============ ENEMY FOLDER ============
 local function scanAllEnemyFolders()
     local folders = {}
     for _, obj in ipairs(workspace:GetDescendants()) do
@@ -159,57 +126,40 @@ local function scanAllEnemyFolders()
     return folders
 end
 
-local function getEnemyFolders(force)
+local function getEnemyFolders()
     local now = tick()
-    if force 
-        or #State.EnemyFolders == 0 
-        or (now - State.LastFolderScan) >= CONFIG.FolderScanInterval then
+    if #State.EnemyFolders == 0 or (now - State.LastFolderScan) >= 2 then
         State.EnemyFolders = scanAllEnemyFolders()
         State.LastFolderScan = now
     end
     return State.EnemyFolders
 end
 
--- ============ HUMANOID & HRP ROBUST ============
+-- ============ HUMANOID ============
 local function getHumanoidAndHRP(enemy)
     if not enemy or not enemy.Parent then return nil, nil end
-    
     local hum = enemy:FindFirstChildOfClass("Humanoid") 
         or enemy:FindFirstChildWhichIsA("Humanoid", true)
     if not hum then return nil, nil end
-    
-    local hp = hum.Health
-    local attrHp = enemy:GetAttribute("Health") or enemy:GetAttribute("health")
-    if attrHp then hp = attrHp end
-    if not hp or hp <= 0 then return nil, nil end
-    
+    if hum.Health <= 0 then return nil, nil end
     local ok, st = pcall(function() return hum:GetState() end)
     if ok and st == Enum.HumanoidStateType.Dead then return nil, nil end
     
     local hrp = enemy:FindFirstChild("HumanoidRootPart")
         or enemy:FindFirstChild("HumanoidRootPart", true)
         or enemy.PrimaryPart
-        or enemy:FindFirstChild("Torso")
         or enemy:FindFirstChild("Torso", true)
-        or enemy:FindFirstChild("UpperTorso")
         or enemy:FindFirstChild("UpperTorso", true)
-        or enemy:FindFirstChild("Head")
         or enemy:FindFirstChild("Head", true)
-    
     if not hrp then return nil, nil end
     return hum, hrp
 end
 
 local function findNearestEnemy()
-    local folders = getEnemyFolders(false)
-    if #folders == 0 then
-        setStatus("No enemyFolder")
-        return nil, 0, nil
-    end
-    if not State.RootPart then return nil, 0, nil end
+    local folders = getEnemyFolders()
+    if #folders == 0 or not State.RootPart then return nil, 0, nil end
 
     local nearest, nearestDist = nil, math.huge
-    local nearestFolder = nil
     local totalCount = 0
     local roomInfo = {}
 
@@ -217,7 +167,6 @@ local function findNearestEnemy()
         if folder and folder.Parent then
             local roomName = folder.Parent and folder.Parent.Name or "?"
             local roomCount = 0
-            
             for _, enemy in ipairs(folder:GetChildren()) do
                 if enemy:IsA("Model") or enemy:IsA("Folder") then
                     local hum, hrp = getHumanoidAndHRP(enemy)
@@ -228,25 +177,28 @@ local function findNearestEnemy()
                         if dist < nearestDist then
                             nearestDist = dist
                             nearest = enemy
-                            nearestFolder = folder
                         end
                     end
                 end
             end
-            
             if roomCount > 0 then
-                table.insert(roomInfo, string.format("%s:%d", roomName, roomCount))
+                table.insert(roomInfo, roomName .. ":" .. roomCount)
             end
         end
     end
     
-    State.CurrentRoom = nearestFolder
     if totalCount == 0 then State.LastFolderScan = 0 end
-    
     return nearest, totalCount, roomInfo
 end
 
--- ============ ANTI-STUCK ============
+-- ============ ANTI-STUCK (SIMPLE & AGRESSIVE) ============
+local function resetPath()
+    State.PathWaypoints = nil
+    State.PathIndex = 1
+    State.PathEnemyRef = nil
+    State.PathTargetPos = nil
+end
+
 local function checkStuck()
     if not State.RootPart then return false end
     local myPos = State.RootPart.Position
@@ -256,6 +208,7 @@ local function checkStuck()
             State.StuckTime = State.StuckTime + 0.05
         else
             State.StuckTime = 0
+            State.UnstickCount = 0  -- reset kalau udah gerak
         end
     end
     State.LastPos = myPos
@@ -263,15 +216,40 @@ local function checkStuck()
 end
 
 local function unstick()
-    if not State.Humanoid then return end
-    State.Humanoid.Jump = true
-    task.wait(0.05)
+    if not State.Humanoid or not State.RootPart then return end
+    
+    State.UnstickCount = State.UnstickCount + 1
     local myPos = State.RootPart.Position
-    local offset = Vector3.new(
-        (math.random() - 0.5) * 8, 0, (math.random() - 0.5) * 8
-    )
-    State.Humanoid:MoveTo(myPos + offset)
+    
+    -- Strategi bertingkat berdasarkan attempt
+    if State.UnstickCount == 1 then
+        -- Attempt 1: lompat + jalan random
+        State.Humanoid.Jump = true
+        task.wait(0.1)
+        local angle = math.random() * math.pi * 2
+        local offset = Vector3.new(math.cos(angle) * 8, 0, math.sin(angle) * 8)
+        State.Humanoid:MoveTo(myPos + offset)
+    elseif State.UnstickCount == 2 then
+        -- Attempt 2: mundur dikit + lompat
+        State.Humanoid.Jump = true
+        task.wait(0.1)
+        local back = -State.RootPart.CFrame.LookVector * 6
+        State.Humanoid:MoveTo(myPos + back)
+    else
+        -- Attempt 3+: teleport dikit (kalau executor support)
+        pcall(function()
+            State.RootPart.CFrame = State.RootPart.CFrame + Vector3.new(0, 3, 0)
+        end)
+        State.Humanoid.Jump = true
+        task.wait(0.2)
+        local angle = math.random() * math.pi * 2
+        local offset = Vector3.new(math.cos(angle) * 10, 0, math.sin(angle) * 10)
+        State.Humanoid:MoveTo(myPos + offset)
+        State.UnstickCount = 0  -- reset counter
+    end
+    
     State.StuckTime = 0
+    resetPath()  -- paksa recompute path
 end
 
 -- ============ KITING ============
@@ -285,76 +263,87 @@ local function kiteAway(enemy)
     awayDir = Vector3.new(awayDir.X, 0, awayDir.Z).Unit
     local targetPos = myPos + awayDir * (CONFIG.KeepDistance * 0.5)
     
-    local path = PathfindingService:CreatePath({
-        AgentRadius = 3, AgentHeight = 5, AgentCanJump = true,
-        AgentJumpHeight = 10, AgentMaxSlope = 45,
-    })
-    
-    local ok = pcall(function()
-        path:ComputeAsync(myPos, targetPos)
-    end)
-    
-    if ok and path.Status == Enum.PathStatus.Success then
-        local waypoints = path:GetWaypoints()
-        if #waypoints >= 2 then
-            local wp = waypoints[2]
-            State.Humanoid:MoveTo(wp.Position)
-            if wp.Action == Enum.PathWaypointAction.Jump then
-                State.Humanoid.Jump = true
-            end
-        end
-    else
-        State.Humanoid:MoveTo(targetPos)
-    end
+    -- kabur: pakai MoveTo langsung aja
+    State.Humanoid:MoveTo(targetPos)
 end
 
--- ============ WALK (NON-BLOCKING) ============
+-- ============ WALK (SMOOTH, CACHED PATH) ============
 local function walkToEnemy(enemy)
     if not State.Humanoid or not State.RootPart then return end
     local _, hrp = getHumanoidAndHRP(enemy)
     if not hrp then return end
     
+    -- ANTI-STUCK cek dulu
     if checkStuck() then
         unstick()
         return
     end
     
-    local now = tick()
-    if now - State.LastPathCompute < CONFIG.PathRecomputeDelay then return end
-    State.LastPathCompute = now
-    
     local myPos = State.RootPart.Position
-    local path = PathfindingService:CreatePath({
-        AgentRadius = 3, AgentHeight = 5, AgentCanJump = true,
-        AgentJumpHeight = 10, AgentMaxSlope = 45,
-        Costs = { Water = 20 },
-    })
+    local enemyPos = hrp.Position
     
-    local ok = pcall(function()
-        path:ComputeAsync(myPos, hrp.Position)
-    end)
+    -- perlu recompute?
+    local needRecompute = false
+    if not State.PathWaypoints or #State.PathWaypoints == 0 then needRecompute = true end
+    if State.PathEnemyRef ~= enemy then needRecompute = true end
+    if State.PathWaypoints and State.PathIndex > #State.PathWaypoints then needRecompute = true end
+    if State.PathTargetPos then
+        local moved = (enemyPos - State.PathTargetPos).Magnitude
+        if moved > 8 then needRecompute = true end
+    end
     
-    if ok and path.Status == Enum.PathStatus.Success then
-        local waypoints = path:GetWaypoints()
-        if #waypoints >= 2 then
-            local wp = waypoints[2]
+    -- recompute
+    if needRecompute then
+        local path = PathfindingService:CreatePath({
+            AgentRadius = 3, AgentHeight = 5, AgentCanJump = true,
+            AgentJumpHeight = 10, AgentMaxSlope = 45,
+        })
+        
+        local ok = pcall(function()
+            path:ComputeAsync(myPos, enemyPos)
+        end)
+        
+        if ok and path.Status == Enum.PathStatus.Success then
+            State.PathWaypoints = path:GetWaypoints()
+            State.PathIndex = 2
+            State.PathTargetPos = enemyPos
+            State.PathEnemyRef = enemy
+        else
+            -- fallback: coba jump + gerak langsung
+            State.Humanoid.Jump = true
+            State.Humanoid:MoveTo(enemyPos)
+            return
+        end
+    end
+    
+    -- follow waypoint
+    if State.PathWaypoints and State.PathIndex <= #State.PathWaypoints then
+        local wp = State.PathWaypoints[State.PathIndex]
+        local dist = (myPos - wp.Position).Magnitude
+        
+        if dist <= 4 then
+            State.PathIndex = State.PathIndex + 1
+            if State.PathIndex <= #State.PathWaypoints then
+                local nextWp = State.PathWaypoints[State.PathIndex]
+                State.Humanoid:MoveTo(nextWp.Position)
+                if nextWp.Action == Enum.PathWaypointAction.Jump then
+                    State.Humanoid.Jump = true
+                end
+            end
+        else
             State.Humanoid:MoveTo(wp.Position)
             if wp.Action == Enum.PathWaypointAction.Jump then
                 State.Humanoid.Jump = true
             end
         end
-    else
-        State.Humanoid:MoveTo(hrp.Position)
     end
 end
 
--- ============ ATTACK (NO FACE ENEMY) ============
+-- ============ ATTACK ============
 local function attackEnemy(enemy)
     local now = tick()
     if now - State.LastAttack < CONFIG.AttackCooldown then return end
     State.LastAttack = now
-
-    -- cuma press Q + E, gak ada face / touch / camera lock
     pressQ()
     task.wait(0.08)
     pressE()
@@ -375,29 +364,28 @@ local function mainLoop()
             continue
         end
 
-        if CONFIG.WalkSpeed ~= 16 and State.Humanoid.WalkSpeed ~= CONFIG.WalkSpeed then
+        -- walkspeed reapply
+        if State.Humanoid.WalkSpeed ~= CONFIG.WalkSpeed then
             applyWalkSpeed()
         end
 
-        if CONFIG.AutoUpgrade and (tick() - State.LastUpgrade) >= CONFIG.UpgradeInterval then
+        -- auto upgrade
+        if CONFIG.AutoUpgrade and (tick() - State.LastUpgrade) >= 3 then
             upgradeSpell()
         end
 
         local enemy, count, roomInfo = findNearestEnemy()
-        State.CurrentEnemy = enemy
 
         if enemy then
             if CONFIG.UseShiftlock then
                 local sl = LocalPlayer:FindFirstChild("shiftlockMobile")
-                if sl and sl.Value == false then
-                    enableShiftlock()
-                end
+                if sl and sl.Value == false then setShiftlock(true) end
             end
             
             local _, ehrp = getHumanoidAndHRP(enemy)
             if ehrp then
                 local dist = (ehrp.Position - State.RootPart.Position).Magnitude
-                local kiteThreshold = CONFIG.KeepDistance - CONFIG.DistanceTolerance
+                local kiteThreshold = CONFIG.KeepDistance - 3
                 
                 local roomStr = ""
                 if roomInfo and #roomInfo > 0 then
@@ -405,30 +393,29 @@ local function mainLoop()
                 end
 
                 if dist < kiteThreshold then
-                    setStatus(string.format("Kiting (%.1f) | %d%s", dist, count or 0, roomStr))
+                    setStatus(string.format("Kiting (%.1f) | %d%s", dist, count, roomStr))
+                    resetPath()
                     task.spawn(function() attackEnemy(enemy) end)
                     kiteAway(enemy)
                 elseif dist <= CONFIG.AttackDistance then
                     attackEnemy(enemy)
-                    setStatus(string.format("Attacking (%.1f) | %d%s", dist, count or 0, roomStr))
+                    resetPath()
+                    setStatus(string.format("Attacking (%.1f) | %d%s", dist, count, roomStr))
                 else
-                    setStatus(string.format("Approaching (%.1f) | %d%s", dist, count or 0, roomStr))
+                    setStatus(string.format("Approaching (%.1f) | %d%s", dist, count, roomStr))
                     walkToEnemy(enemy)
                 end
             end
         else
-            State.CurrentEnemy = nil
             State.StuckTime = 0
+            resetPath()
             setStatus(string.format("No enemy | %d rooms", #State.EnemyFolders))
         end
     end
-    
-    if CONFIG.UseShiftlock then restoreShiftlock() end
-    restoreWalkSpeed()
 end
 
 -- ============================================
---      UI: STATUS OVERLAY + SETTINGS PANEL
+--      UI
 -- ============================================
 local function createUI()
     if CoreGui:FindFirstChild("AutoFarmUI") then
@@ -442,11 +429,10 @@ local function createUI()
     screenGui.IgnoreGuiInset = true
     screenGui.Parent = CoreGui
 
-    -- ============ STATUS OVERLAY (selalu keliatan) ============
+    -- STATUS OVERLAY
     local statusOverlay = Instance.new("TextLabel")
-    statusOverlay.Name = "StatusOverlay"
-    statusOverlay.Size = UDim2.new(0, 400, 0, 32)
-    statusOverlay.Position = UDim2.new(0.5, -200, 0, 10)
+    statusOverlay.Size = UDim2.new(0, 420, 0, 32)
+    statusOverlay.Position = UDim2.new(0.5, -210, 0, 10)
     statusOverlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
     statusOverlay.BackgroundTransparency = 0.4
     statusOverlay.Text = "⚔ Idle"
@@ -454,7 +440,6 @@ local function createUI()
     statusOverlay.TextSize = 16
     statusOverlay.Font = Enum.Font.GothamBold
     statusOverlay.TextStrokeTransparency = 0.5
-    statusOverlay.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
     statusOverlay.ZIndex = 5
     statusOverlay.Parent = screenGui
 
@@ -469,14 +454,11 @@ local function createUI()
     soStroke.Parent = statusOverlay
 
     setStatus = function(msg)
-        pcall(function()
-            statusOverlay.Text = "⚔ " .. msg
-        end)
+        pcall(function() statusOverlay.Text = "⚔ " .. msg end)
     end
 
-    -- ============ FLOATING BUTTON (buat buka settings) ============
+    -- FLOATING BUTTON
     local floatBtn = Instance.new("TextButton")
-    floatBtn.Name = "FloatBtn"
     floatBtn.Size = UDim2.new(0, 55, 0, 55)
     floatBtn.Position = UDim2.new(0, 15, 0.5, -27)
     floatBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
@@ -500,11 +482,10 @@ local function createUI()
     fbStroke.Transparency = 0.3
     fbStroke.Parent = floatBtn
 
-    -- ============ SETTINGS PANEL ============
+    -- SETTINGS PANEL
     local main = Instance.new("Frame")
-    main.Name = "SettingsPanel"
-    main.Size = UDim2.new(0, 300, 0, 560)
-    main.Position = UDim2.new(0.5, -150, 0.5, -280)
+    main.Size = UDim2.new(0, 300, 0, 480)
+    main.Position = UDim2.new(0.5, -150, 0.5, -240)
     main.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
     main.BorderSizePixel = 0
     main.Active = true
@@ -522,7 +503,6 @@ local function createUI()
     mainStroke.Thickness = 2
     mainStroke.Parent = main
 
-    -- TITLE BAR
     local title = Instance.new("Frame")
     title.Size = UDim2.new(1, 0, 0, 45)
     title.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
@@ -570,11 +550,8 @@ local function createUI()
     closeCorner.CornerRadius = UDim.new(0, 8)
     closeCorner.Parent = closeBtn
 
-    closeBtn.MouseButton1Click:Connect(function()
-        main.Visible = false
-    end)
+    closeBtn.MouseButton1Click:Connect(function() main.Visible = false end)
 
-    -- SCROLL
     local scroll = Instance.new("ScrollingFrame")
     scroll.Size = UDim2.new(1, -20, 1, -60)
     scroll.Position = UDim2.new(0, 10, 0, 50)
@@ -606,7 +583,7 @@ local function createUI()
         rowCorner.Parent = row
 
         local lbl = Instance.new("TextLabel")
-        lbl.Size = UDim2.new(0.45, -10, 1, 0)
+        lbl.Size = UDim2.new(0.5, -10, 1, 0)
         lbl.Position = UDim2.new(0, 12, 0, 0)
         lbl.BackgroundTransparency = 1
         lbl.Text = labelText
@@ -618,8 +595,8 @@ local function createUI()
         lbl.Parent = row
 
         local box = Instance.new("TextBox")
-        box.Size = UDim2.new(0.5, -15, 0, 32)
-        box.Position = UDim2.new(0.48, 0, 0, 6)
+        box.Size = UDim2.new(0.45, -15, 0, 32)
+        box.Position = UDim2.new(0.5, 0, 0, 6)
         box.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
         box.Text = tostring(defaultVal)
         box.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -690,22 +667,18 @@ local function createUI()
         end)
     end
 
+    -- setting minimalis
     createInput("Attack Distance", CONFIG.AttackDistance, 1, function(v) CONFIG.AttackDistance = v end)
     createInput("Keep Distance", CONFIG.KeepDistance, 2, function(v) CONFIG.KeepDistance = v end)
-    createInput("Distance Tolerance", CONFIG.DistanceTolerance, 3, function(v) CONFIG.DistanceTolerance = v end)
-    createInput("Attack Cooldown", CONFIG.AttackCooldown, 4, function(v) CONFIG.AttackCooldown = v end)
-    createInput("Walk Speed", CONFIG.WalkSpeed, 5, function(v) 
+    createInput("Attack Cooldown", CONFIG.AttackCooldown, 3, function(v) CONFIG.AttackCooldown = v end)
+    createInput("Walk Speed", CONFIG.WalkSpeed, 4, function(v) 
         CONFIG.WalkSpeed = v
         applyWalkSpeed()
     end)
-    createInput("Stuck Timeout", CONFIG.StuckTimeout, 6, function(v) CONFIG.StuckTimeout = v end)
-    createInput("Folder Scan Interval", CONFIG.FolderScanInterval, 7, function(v) CONFIG.FolderScanInterval = v end)
-    createInput("Skill Name", CONFIG.SkillName, 8, function(v) CONFIG.SkillName = v end)
-    createInput("Upgrade Interval", CONFIG.UpgradeInterval, 9, function(v) CONFIG.UpgradeInterval = v end)
-    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 10, function(v) CONFIG.AutoUpgrade = v end)
-    createToggle("Use Shiftlock", CONFIG.UseShiftlock, 11, function(v) 
+    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 5, function(v) CONFIG.AutoUpgrade = v end)
+    createToggle("Use Shiftlock", CONFIG.UseShiftlock, 6, function(v) 
         CONFIG.UseShiftlock = v
-        if v then enableShiftlock() else restoreShiftlock() end
+        if v then setShiftlock(true) else setShiftlock(false) end
     end)
 
     local startBtn = Instance.new("TextButton")
@@ -716,7 +689,7 @@ local function createUI()
     startBtn.TextSize = 17
     startBtn.Font = Enum.Font.GothamBold
     startBtn.BorderSizePixel = 0
-    startBtn.LayoutOrder = 12
+    startBtn.LayoutOrder = 7
     startBtn.ZIndex = 11
     startBtn.Parent = scroll
 
@@ -727,20 +700,18 @@ local function createUI()
     local footer = Instance.new("TextLabel")
     footer.Size = UDim2.new(1, 0, 0, 20)
     footer.BackgroundTransparency = 1
-    footer.Text = "Multi-room v14 | No face"
+    footer.Text = "Simple Mode v16"
     footer.TextColor3 = Color3.fromRGB(120, 120, 130)
     footer.TextSize = 11
     footer.Font = Enum.Font.Gotham
-    footer.LayoutOrder = 13
+    footer.LayoutOrder = 8
     footer.ZIndex = 11
     footer.Parent = scroll
 
-    -- FLOAT BTN click → toggle panel
     floatBtn.MouseButton1Click:Connect(function()
         main.Visible = not main.Visible
     end)
 
-    -- START/STOP
     startBtn.MouseButton1Click:Connect(function()
         if State.Running then
             State.Running = false
@@ -749,8 +720,7 @@ local function createUI()
             floatBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
             soStroke.Color = Color3.fromRGB(100, 200, 100)
             setStatus("Idle")
-            if CONFIG.UseShiftlock then restoreShiftlock() end
-            restoreWalkSpeed()
+            resetPath()
         else
             State.Running = true
             startBtn.Text = "■  STOP FARM"
@@ -766,7 +736,7 @@ local function createUI()
                     upgradeSpell()
                     task.wait(0.5)
                 end
-                if CONFIG.UseShiftlock then enableShiftlock() end
+                if CONFIG.UseShiftlock then setShiftlock(true) end
                 applyWalkSpeed()
                 setStatus("Running")
                 mainLoop()
@@ -779,4 +749,4 @@ end
 
 -- ============ INIT ============
 createUI()
-print("[AutoFarm Mobile v14] Loaded - status overlay + settings panel")
+print("[AutoFarm Mobile v16] Loaded - simple mode")
