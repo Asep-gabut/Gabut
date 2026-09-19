@@ -1,6 +1,6 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v50                    ║
--- ║   Pathfinder v42 + Anti Lag FULL ON       ║
+-- ║   AUTO FARM KAITUN v51                    ║
+-- ║   Pathfinder v42 + Anti Lag + Status     ║
 -- ╚══════════════════════════════════════════╝
 
 -- ═══════════════════════════════════════════
@@ -8,7 +8,7 @@
 -- ═══════════════════════════════════════════
 local CONFIG = {
     -- Combat
-    KeepDistance = 50,
+    KeepDistance = 45,
     AttackCooldown = 0.5,
     LoopDelay = 0.05,
     
@@ -16,8 +16,8 @@ local CONFIG = {
     UseWalkSpeed = true,
     WalkSpeed = 20,
     
-    -- Pathfinding (v42 style)
-    WaypointReached = 5,
+    -- Pathfinding
+    WaypointReached = 10,
     TargetMoveThreshold = 1,
     
     -- Auto
@@ -25,7 +25,7 @@ local CONFIG = {
     AutoReconnect = true,
     AntiAFK = true,
     
-    -- Anti Lag - SEMUA TRUE
+    -- Anti Lag
     AntiLag = true,
     AntiLag_HidePlayers = true,
     AntiLag_DisableParticles = true,
@@ -46,6 +46,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local PathfindingService = game:GetService("PathfindingService")
 local Lighting = game:GetService("Lighting")
+local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
@@ -54,24 +55,66 @@ local State = {
     Running = false, Character = nil, Humanoid = nil, RootPart = nil,
     LastAttack = 0, LastUpgrade = 0,
     EnemyFolders = {}, LastFolderScan = 0,
-    PathWaypoints = nil,
-    PathIndex = 1,
-    PathTargetPos = nil,
-    PathGoalType = nil,
-    PathBusy = false,
-    LastMoveToPos = nil,
+    PathWaypoints = nil, PathIndex = 1, PathTargetPos = nil,
+    PathGoalType = nil, PathBusy = false, LastMoveToPos = nil,
     LockedEnemyPos = nil, ShiftlockSaved = nil, OriginalWalkSpeed = nil,
 }
 
 -- ═══════════════════════════════════════════
---              ANTI LAG (FULL)
+--              STATUS OVERLAY
+-- ═══════════════════════════════════════════
+if CoreGui:FindFirstChild("FarmStatus") then
+    CoreGui.FarmStatus:Destroy()
+end
+
+local statusGui = Instance.new("ScreenGui")
+statusGui.Name = "FarmStatus"
+statusGui.ResetOnSpawn = false
+statusGui.IgnoreGuiInset = true
+statusGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+statusGui.Parent = CoreGui
+
+local statusOverlay = Instance.new("TextLabel")
+statusOverlay.Size = UDim2.new(0, 420, 0, 32)
+statusOverlay.Position = UDim2.new(0.5, -210, 0, 10)
+statusOverlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+statusOverlay.BackgroundTransparency = 0.35
+statusOverlay.Text = "⚔ Idle"
+statusOverlay.TextColor3 = Color3.fromRGB(180, 255, 180)
+statusOverlay.TextSize = 16
+statusOverlay.Font = Enum.Font.GothamBold
+statusOverlay.TextStrokeTransparency = 0.5
+statusOverlay.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+statusOverlay.ZIndex = 5
+statusOverlay.Parent = statusGui
+
+local soCorner = Instance.new("UICorner")
+soCorner.CornerRadius = UDim.new(0, 8)
+soCorner.Parent = statusOverlay
+
+local soStroke = Instance.new("UIStroke")
+soStroke.Color = Color3.fromRGB(100, 200, 100)
+soStroke.Thickness = 1.5
+soStroke.Transparency = 0.3
+soStroke.Parent = statusOverlay
+
+setStatus = function(msg, color)
+    pcall(function()
+        statusOverlay.Text = "⚔ " .. msg
+        if color then
+            statusOverlay.TextColor3 = color
+            soStroke.Color = color
+        end
+    end)
+end
+
+-- ═══════════════════════════════════════════
+--              ANTI LAG
 -- ═══════════════════════════════════════════
 local AntiLag = {}
 
 function AntiLag.setup()
     if not CONFIG.AntiLag then return end
-    
-    -- 1. Low graphics
     if CONFIG.AntiLag_LowGraphics then
         pcall(function()
             settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
@@ -82,7 +125,6 @@ function AntiLag.setup()
             Lighting.EnvironmentSpecularScale = 0
             Lighting.Ambient = Color3.fromRGB(128, 128, 128)
             Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
-            
             for _, effect in ipairs(Lighting:GetChildren()) do
                 if effect:IsA("BlurEffect") or effect:IsA("SunRaysEffect")
                     or effect:IsA("ColorCorrectionEffect") or effect:IsA("BloomEffect")
@@ -92,8 +134,6 @@ function AntiLag.setup()
             end
         end)
     end
-    
-    -- 2. Hide terrain
     if CONFIG.AntiLag_HideTerrain then
         pcall(function()
             workspace.Terrain.WaterWaveSize = 0
@@ -102,48 +142,39 @@ function AntiLag.setup()
             workspace.Terrain.WaterTransparency = 1
         end)
     end
-    
     AntiLag.processInstance(workspace)
 end
 
 function AntiLag.processInstance(container)
     if not CONFIG.AntiLag then return end
-    
     for _, obj in ipairs(container:GetDescendants()) do
         AntiLag.cleanInstance(obj)
     end
-    
     container.DescendantAdded:Connect(function(obj)
-        task.wait(0.1)
-        AntiLag.cleanInstance(obj)
+        task.defer(function()
+            AntiLag.cleanInstance(obj)
+        end)
     end)
 end
 
 function AntiLag.cleanInstance(obj)
     pcall(function()
-        -- Particles
         if CONFIG.AntiLag_DisableParticles then
             if obj:IsA("ParticleEmitter") then
                 obj.Enabled = false
                 obj.Rate = 0
             end
             if obj:IsA("Trail") or obj:IsA("Smoke") 
-                or obj:IsA("Fire") or obj:IsA("Sparkles") then
-                obj.Enabled = false
-            end
-            if obj:IsA("Beam") then
+                or obj:IsA("Fire") or obj:IsA("Sparkles") 
+                or obj:IsA("Beam") then
                 obj.Enabled = false
             end
         end
-        
-        -- Decals / textures
         if CONFIG.AntiLag_DisableDecals then
             if obj:IsA("Decal") or obj:IsA("Texture") then
                 obj.Transparency = 1
             end
         end
-        
-        -- Animations player lain
         if CONFIG.AntiLag_DisableAnimations then
             if obj:IsA("Animator") and obj.Parent then
                 local char = LocalPlayer.Character
@@ -151,15 +182,7 @@ function AntiLag.cleanInstance(obj)
                     pcall(function() obj:Destroy() end)
                 end
             end
-            if obj:IsA("Animation") and obj.Parent then
-                local char = LocalPlayer.Character
-                if char and not obj:IsDescendantOf(char) then
-                    pcall(function() obj:Destroy() end)
-                end
-            end
         end
-        
-        -- Accessories
         if CONFIG.AntiLag_HideAccessories then
             if obj:IsA("Accessory") or obj:IsA("Hat") then
                 if obj.Parent then
@@ -175,7 +198,6 @@ end
 
 function AntiLag.hideOtherPlayers()
     if not CONFIG.AntiLag_HidePlayers then return end
-    
     local function hideChar(char)
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") or part:IsA("Decal") then
@@ -183,13 +205,11 @@ function AntiLag.hideOtherPlayers()
             end
         end
     end
-    
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             hideChar(player.Character)
         end
     end
-    
     Players.PlayerAdded:Connect(function(player)
         player.CharacterAdded:Connect(function(char)
             task.wait(1)
@@ -300,7 +320,6 @@ local function setupCharacter(char)
     
     task.wait(1)
     applyWalkSpeed()
-    
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
 end
 
@@ -399,7 +418,7 @@ local function findNearestEnemy()
 end
 
 -- ═══════════════════════════════════════════
---              PATH (VERSI V42) ⭐
+--              PATH (V42 STYLE)
 -- ═══════════════════════════════════════════
 local function resetPath()
     State.PathWaypoints = nil
@@ -448,7 +467,6 @@ local function requestPath(targetPos, goalType)
     end)
 end
 
--- v42 followPath (LastMoveToPos tracking)
 local function followPath()
     if not State.Humanoid or not State.RootPart then return end
     if not State.PathWaypoints then
@@ -528,7 +546,7 @@ local function mainLoop()
         if not State.Character or not State.Character.Parent then task.wait(0.5) continue end
         if State.Humanoid.Health <= 0 then task.wait(1) continue end
         
-        -- WalkSpeed re-apply di loop
+        -- WalkSpeed re-apply
         if CONFIG.UseWalkSpeed and State.Humanoid.WalkSpeed ~= CONFIG.WalkSpeed then
             applyWalkSpeed()
         end
@@ -554,11 +572,19 @@ local function mainLoop()
                 
                 if dist > CONFIG.KeepDistance then
                     -- APPROACH
+                    setStatus(
+                        string.format("Approaching (%.1f) | %d enemy", dist, count),
+                        Color3.fromRGB(100, 200, 255)
+                    )
                     requestPath(enemyPos, "approach")
                     followPath()
                     attackEnemy(enemy)
                 else
-                    -- RETREAT
+                    -- RETREAT / KITE
+                    setStatus(
+                        string.format("Kiting (%.1f) | %d enemy", dist, count),
+                        Color3.fromRGB(255, 200, 100)
+                    )
                     local safePoint = findSafePointAroundEnemy(enemyPos, myPos)
                     if safePoint then
                         requestPath(safePoint, "retreat")
@@ -570,6 +596,7 @@ local function mainLoop()
         else
             State.LockedEnemyPos = nil
             resetPath()
+            setStatus("No enemy | scanning...", Color3.fromRGB(150, 150, 150))
         end
     end
 end
@@ -578,17 +605,17 @@ end
 --              INIT
 -- ═══════════════════════════════════════════
 task.spawn(function()
-    -- Anti lag
     AntiLag.setup()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
     setupAntiAFK()
     setupAutoReconnect()
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v50 - LOADED    ║")
-    print("║   Pathfinder: v42 style            ║")
-    print("║   Anti Lag: FULL ON                ║")
+    print("║   AUTO FARM KAITUN v51 - LOADED    ║")
+    print("║   Pathfinder v42 + Anti Lag + UI   ║")
     print("╚════════════════════════════════════╝")
+    
+    setStatus("Starting...", Color3.fromRGB(200, 200, 100))
     
     State.Running = true
     task.wait(3)
@@ -604,6 +631,7 @@ task.spawn(function()
     applyWalkSpeed()
     setShiftlock(true)
     
+    setStatus("Running", Color3.fromRGB(100, 255, 100))
     print("[KAITUN] Started auto farm...")
     mainLoop()
 end)
