@@ -1,6 +1,6 @@
 -- ============================================
--- AUTO FARM DUNGEON - MOBILE EDITION (v37)
--- Smooth: compute sekali, follow semua waypoint
+-- AUTO FARM DUNGEON - MOBILE EDITION (v41)
+-- Smooth pathfinder + BodyGyro face
 -- ============================================
 
 local Players = game:GetService("Players")
@@ -12,26 +12,27 @@ local LocalPlayer = Players.LocalPlayer
 
 local CONFIG = {
     KeepDistance = 45,
-    Tolerance = 2,
     AttackCooldown = 0.5,
     AutoUpgrade = true,
-    FacingThreshold = 0.5,
-    StepForward = 1,
     WaypointReached = 4,
-    TargetMoveThreshold = 10,   -- recompute kalau target geser > N stud
+    TargetMoveThreshold = 15,
+    UseBodyGyro = true,
+    GyroPower = 10000,
+    GyroP = 3000,
+    GyroD = 500,
 }
 
 local State = {
     Running = false, Character = nil, Humanoid = nil, RootPart = nil,
     LastAttack = 0, LastUpgrade = 0,
     EnemyFolders = {}, LastFolderScan = 0,
-    -- path state
     PathWaypoints = nil,
     PathIndex = 1,
     PathTargetPos = nil,
-    PathGoalType = nil,   -- "approach" / "retreat"
-    PathRequestTime = 0,
+    PathGoalType = nil,
     PathBusy = false,
+    LastMoveToPos = nil,
+    Gyro = nil,
 }
 
 setStatus = function() end
@@ -50,10 +51,41 @@ local function pressE()
     pcall(function() keyrelease(KEY_E) end)
 end
 
+-- ============ BODYGYRO ============
+local function setupGyro()
+    if not State.RootPart then return end
+    if State.Gyro then State.Gyro:Destroy() end
+    
+    local bg = Instance.new("BodyGyro")
+    bg.Name = "FarmFaceGyro"
+    bg.MaxTorque = Vector3.new(0, CONFIG.GyroPower, 0)
+    bg.P = CONFIG.GyroP
+    bg.D = CONFIG.GyroD
+    bg.Parent = State.RootPart
+    State.Gyro = bg
+end
+
+local function cleanupGyro()
+    if State.Gyro then
+        State.Gyro:Destroy()
+        State.Gyro = nil
+    end
+end
+
+local function faceEnemy(enemyPos)
+    if not CONFIG.UseBodyGyro then return end
+    if not State.Gyro or not State.RootPart then return end
+    local myPos = State.RootPart.Position
+    local targetPos = Vector3.new(enemyPos.X, myPos.Y, enemyPos.Z)
+    State.Gyro.CFrame = CFrame.lookAt(myPos, targetPos)
+end
+
 local function setupCharacter(char)
     State.Character = char
     State.Humanoid = char:WaitForChild("Humanoid")
     State.RootPart = char:WaitForChild("HumanoidRootPart")
+    task.wait(0.3)
+    if CONFIG.UseBodyGyro then setupGyro() end
 end
 
 if LocalPlayer.Character then setupCharacter(LocalPlayer.Character) end
@@ -148,53 +180,28 @@ local function findNearestEnemy()
     return nearest, totalCount, roomInfo
 end
 
-local function isFacingEnemy(enemyPos)
-    if not State.RootPart then return false end
-    local myPos = State.RootPart.Position
-    local look = State.RootPart.CFrame.LookVector
-    look = Vector3.new(look.X, 0, look.Z)
-    if look.Magnitude < 0.01 then return false end
-    look = look.Unit
-    
-    local dirToEnemy = enemyPos - myPos
-    dirToEnemy = Vector3.new(dirToEnemy.X, 0, dirToEnemy.Z)
-    if dirToEnemy.Magnitude < 0.1 then return true end
-    dirToEnemy = dirToEnemy.Unit
-    
-    local dot = look.X * dirToEnemy.X + look.Z * dirToEnemy.Z
-    return dot >= CONFIG.FacingThreshold
-end
-
--- ============ PATH RESET ============
 local function resetPath()
     State.PathWaypoints = nil
     State.PathIndex = 1
     State.PathTargetPos = nil
     State.PathGoalType = nil
+    State.LastMoveToPos = nil
 end
 
--- ============ REQUEST PATH (sekali compute, no spam) ============
 local function requestPath(targetPos, goalType)
     if not State.Humanoid or not State.RootPart then return end
     if not targetPos then return end
     if State.PathBusy then return end
     
-    -- kapan perlu recompute?
     local needRecompute = false
-    
-    if not State.PathWaypoints then 
-        needRecompute = true 
-    elseif State.PathGoalType ~= goalType then
-        needRecompute = true
-    elseif State.PathIndex > #State.PathWaypoints then
-        needRecompute = true
-    elseif State.PathTargetPos and (targetPos - State.PathTargetPos).Magnitude > CONFIG.TargetMoveThreshold then
-        needRecompute = true
+    if not State.PathWaypoints then needRecompute = true
+    elseif State.PathGoalType ~= goalType then needRecompute = true
+    elseif State.PathIndex > #State.PathWaypoints then needRecompute = true
+    elseif State.PathTargetPos and (targetPos - State.PathTargetPos).Magnitude > CONFIG.TargetMoveThreshold then needRecompute = true
     end
     
     if not needRecompute then return end
     
-    -- compute di background (non-blocking)
     State.PathBusy = true
     task.spawn(function()
         local myPos = State.RootPart.Position
@@ -206,57 +213,56 @@ local function requestPath(targetPos, goalType)
         
         if ok and path.Status == Enum.PathStatus.Success then
             State.PathWaypoints = path:GetWaypoints()
-            State.PathIndex = 2  -- mulai dari wp ke-2
+            State.PathIndex = 2
             State.PathTargetPos = targetPos
             State.PathGoalType = goalType
+            State.LastMoveToPos = nil
         else
             State.PathWaypoints = nil
             State.PathTargetPos = targetPos
             State.PathGoalType = goalType
+            State.LastMoveToPos = nil
         end
         State.PathBusy = false
     end)
 end
 
--- ============ FOLLOW PATH (per-frame, smooth) ⭐ ============
+-- ============ FOLLOW PATH (anti-stutter) ============
 local function followPath()
     if not State.Humanoid or not State.RootPart then return end
     if not State.PathWaypoints then
-        -- fallback: langsung ke target
         if State.PathTargetPos then
-            State.Humanoid:MoveTo(State.PathTargetPos)
+            if not State.LastMoveToPos 
+                or (State.LastMoveToPos - State.PathTargetPos).Magnitude > 0.5 then
+                State.Humanoid:MoveTo(State.PathTargetPos)
+                State.LastMoveToPos = State.PathTargetPos
+            end
         end
         return
     end
     
-    if State.PathIndex > #State.PathWaypoints then
-        return  -- path habis, nunggu recompute
-    end
+    if State.PathIndex > #State.PathWaypoints then return end
     
     local myPos = State.RootPart.Position
     local wp = State.PathWaypoints[State.PathIndex]
     local distToWp = (myPos - wp.Position).Magnitude
     
     if distToWp <= CONFIG.WaypointReached then
-        -- advance ke waypoint berikutnya
         State.PathIndex = State.PathIndex + 1
-        if State.PathIndex <= #State.PathWaypoints then
-            local nextWp = State.PathWaypoints[State.PathIndex]
-            State.Humanoid:MoveTo(nextWp.Position)
-            if nextWp.Action == Enum.PathWaypointAction.Jump then
-                State.Humanoid.Jump = true
-            end
-        end
-    else
-        -- pastiin masih gerak ke waypoint ini
+        State.LastMoveToPos = nil
+        return
+    end
+    
+    if not State.LastMoveToPos 
+        or (State.LastMoveToPos - wp.Position).Magnitude > 0.5 then
         State.Humanoid:MoveTo(wp.Position)
+        State.LastMoveToPos = wp.Position
         if wp.Action == Enum.PathWaypointAction.Jump then
             State.Humanoid.Jump = true
         end
     end
 end
 
--- ============ CARI TITIK AMAN DI SEKITAR ENEMY ============
 local function findSafePointAroundEnemy(enemyPos, myPos)
     local bestPoint = nil
     local bestDist = math.huge
@@ -278,7 +284,6 @@ local function findSafePointAroundEnemy(enemyPos, myPos)
     return bestPoint
 end
 
--- ============ ATTACK ============
 local function attackEnemy(enemy)
     local now = tick()
     if now - State.LastAttack < CONFIG.AttackCooldown then return false end
@@ -289,12 +294,17 @@ local function attackEnemy(enemy)
     return true
 end
 
--- ============ MAIN LOOP ============
 local function mainLoop()
     while State.Running do
         task.wait(0.05)
         if not State.Character or not State.Character.Parent then task.wait(0.5) continue end
         if State.Humanoid.Health <= 0 then task.wait(1) continue end
+        
+        -- pastiin gyro ada
+        if CONFIG.UseBodyGyro and (not State.Gyro or not State.Gyro.Parent) then
+            setupGyro()
+        end
+        
         if CONFIG.AutoUpgrade and (tick() - State.LastUpgrade) >= 3 then upgradeSpell() end
 
         local enemy, count, roomInfo = findNearestEnemy()
@@ -305,41 +315,28 @@ local function mainLoop()
                 local enemyPos = ehrp.Position
                 local dist = (enemyPos - myPos).Magnitude
                 
+                -- ⭐ FACE ENEMY tiap frame (BodyGyro)
+                faceEnemy(enemyPos)
+                
                 local roomStr = ""
                 if roomInfo and #roomInfo > 0 then
                     roomStr = " [" .. table.concat(roomInfo, ", ") .. "]"
                 end
 
-                if dist < CONFIG.KeepDistance then
-                    -- RETREAT
-                    setStatus(string.format("Retreating (%.1f) | %d%s", dist, count, roomStr))
+                if dist > CONFIG.KeepDistance then
+                    setStatus(string.format("Approaching (%.1f) | %d%s", dist, count, roomStr))
+                    requestPath(enemyPos, "approach")
+                    followPath()
+                else
+                    setStatus(string.format("Kiting (%.1f) | %d%s", dist, count, roomStr))
                     local safePoint = findSafePointAroundEnemy(enemyPos, myPos)
                     if safePoint then
                         requestPath(safePoint, "retreat")
                         followPath()
                     end
-                else
-                    -- MAJU + FACING + ATTACK
-                    local dirToEnemy = enemyPos - myPos
-                    dirToEnemy = Vector3.new(dirToEnemy.X, 0, dirToEnemy.Z)
-                    
-                    if dirToEnemy.Magnitude > 0.5 then
-                        local stepPos = myPos + dirToEnemy.Unit * CONFIG.StepForward
-                        requestPath(stepPos, "approach")
-                        followPath()
-                        task.wait(0.03)
-                    end
-                    
-                    if isFacingEnemy(enemyPos) then
-                        if attackEnemy(enemy) then
-                            setStatus(string.format("Attacking (%.1f) | %d%s", dist, count, roomStr))
-                        else
-                            setStatus(string.format("Cooldown (%.1f) | %d%s", dist, count, roomStr))
-                        end
-                    else
-                        setStatus(string.format("Rotating (%.1f) | %d%s", dist, count, roomStr))
-                    end
                 end
+                
+                attackEnemy(enemy)
             end
         else
             resetPath()
@@ -409,8 +406,8 @@ local function createUI()
     fbStroke.Parent = floatBtn
 
     local main = Instance.new("Frame")
-    main.Size = UDim2.new(0, 300, 0, 540)
-    main.Position = UDim2.new(0.5, -150, 0.5, -270)
+    main.Size = UDim2.new(0, 300, 0, 560)
+    main.Position = UDim2.new(0.5, -150, 0.5, -280)
     main.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
     main.BorderSizePixel = 0
     main.Active = true
@@ -577,11 +574,17 @@ local function createUI()
 
     createInput("Keep Distance", CONFIG.KeepDistance, 1, function(v) CONFIG.KeepDistance = v end)
     createInput("Attack Cooldown", CONFIG.AttackCooldown, 2, function(v) CONFIG.AttackCooldown = v end)
-    createInput("Facing Threshold", CONFIG.FacingThreshold, 3, function(v) CONFIG.FacingThreshold = v end)
-    createInput("Step Forward", CONFIG.StepForward, 4, function(v) CONFIG.StepForward = v end)
-    createInput("Waypoint Reached", CONFIG.WaypointReached, 5, function(v) CONFIG.WaypointReached = v end)
-    createInput("Target Move Threshold", CONFIG.TargetMoveThreshold, 6, function(v) CONFIG.TargetMoveThreshold = v end)
-    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 7, function(v) CONFIG.AutoUpgrade = v end)
+    createInput("Waypoint Reached", CONFIG.WaypointReached, 3, function(v) CONFIG.WaypointReached = v end)
+    createInput("Target Move Threshold", CONFIG.TargetMoveThreshold, 4, function(v) CONFIG.TargetMoveThreshold = v end)
+    createInput("Gyro Power", CONFIG.GyroPower, 5, function(v) 
+        CONFIG.GyroPower = v
+        if State.Gyro then State.Gyro.MaxTorque = Vector3.new(0, v, 0) end
+    end)
+    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 6, function(v) CONFIG.AutoUpgrade = v end)
+    createToggle("BodyGyro Face", CONFIG.UseBodyGyro, 7, function(v) 
+        CONFIG.UseBodyGyro = v
+        if v then setupGyro() else cleanupGyro() end
+    end)
 
     local startBtn = Instance.new("TextButton")
     startBtn.Size = UDim2.new(1, 0, 0, 55)
@@ -601,7 +604,7 @@ local function createUI()
     local footer = Instance.new("TextLabel")
     footer.Size = UDim2.new(1, 0, 0, 20)
     footer.BackgroundTransparency = 1
-    footer.Text = "v37 - smooth follow"
+    footer.Text = "v41 - smooth + gyro"
     footer.TextColor3 = Color3.fromRGB(120, 120, 130)
     footer.TextSize = 11
     footer.Font = Enum.Font.Gotham
@@ -622,6 +625,7 @@ local function createUI()
             soStroke.Color = Color3.fromRGB(100, 200, 100)
             setStatus("Idle")
             resetPath()
+            cleanupGyro()
         else
             State.Running = true
             startBtn.Text = "■  STOP FARM"
@@ -633,6 +637,7 @@ local function createUI()
                 startGame()
                 task.wait(1.5)
                 if CONFIG.AutoUpgrade then upgradeSpell() task.wait(0.5) end
+                if CONFIG.UseBodyGyro then setupGyro() end
                 setStatus("Running")
                 mainLoop()
             end)
@@ -642,4 +647,4 @@ local function createUI()
 end
 
 createUI()
-print("[AutoFarm Mobile v37] Loaded - smooth follow")
+print("[AutoFarm Mobile v41] Loaded - smooth + gyro")
