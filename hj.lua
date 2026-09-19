@@ -1,6 +1,6 @@
 -- ============================================
--- AUTO FARM DUNGEON - MOBILE EDITION (v21)
--- Face AO + Move() approach (fix pathfinder)
+-- AUTO FARM DUNGEON - MOBILE EDITION (v20)
+-- AlignOrientation face + no walkspeed
 -- ============================================
 
 local Players = game:GetService("Players")
@@ -17,9 +17,7 @@ local CONFIG = {
     AttackCooldown = 0.5,
     AutoUpgrade = true,
     KiteSpeed = 1.2,
-    ApproachSpeed = 1.0,     -- multiplier kecepatan approach
     FaceSmoothness = 30,
-    WaypointReachedDist = 4,
 }
 
 local State = {
@@ -36,6 +34,7 @@ local State = {
     PathIndex = 1,
     PathEnemyRef = nil,
     PathTargetPos = nil,
+    LastMoveToPos = nil,
     LastZone = nil,
     -- AO
     Orientation = nil,
@@ -225,17 +224,7 @@ local function resetPath()
     State.PathIndex = 1
     State.PathEnemyRef = nil
     State.PathTargetPos = nil
-end
-
--- ============ HELPER: MOVE DIRECTION ============
-local function moveToward(targetPos, speedMult)
-    if not State.Humanoid or not State.RootPart then return end
-    local myPos = State.RootPart.Position
-    local dir = targetPos - myPos
-    dir = Vector3.new(dir.X, 0, dir.Z)
-    if dir.Magnitude < 0.1 then return end
-    dir = dir.Unit
-    State.Humanoid:Move(dir * (speedMult or 1))
+    State.LastMoveToPos = nil
 end
 
 -- ============ KITING ============
@@ -246,6 +235,7 @@ local function kiteAway(enemy)
     
     local myPos = State.RootPart.Position
     local enemyPos = hrp.Position
+    
     local awayDir = myPos - enemyPos
     awayDir = Vector3.new(awayDir.X, 0, awayDir.Z)
     if awayDir.Magnitude < 0.1 then return end
@@ -254,7 +244,7 @@ local function kiteAway(enemy)
     State.Humanoid:Move(awayDir * CONFIG.KiteSpeed)
 end
 
--- ============ WALK (pakai Move bukan MoveTo) ⭐ ============
+-- ============ WALK ============
 local function walkToEnemy(enemy)
     if not State.Humanoid or not State.RootPart then return end
     local _, hrp = getHumanoidAndHRP(enemy)
@@ -263,7 +253,6 @@ local function walkToEnemy(enemy)
     local myPos = State.RootPart.Position
     local enemyPos = hrp.Position
     
-    -- perlu recompute?
     local needRecompute = false
     if not State.PathWaypoints or #State.PathWaypoints == 0 then needRecompute = true end
     if State.PathEnemyRef ~= enemy then needRecompute = true end
@@ -288,29 +277,40 @@ local function walkToEnemy(enemy)
             State.PathIndex = 2
             State.PathTargetPos = enemyPos
             State.PathEnemyRef = enemy
+            State.LastMoveToPos = nil
         else
-            -- fallback: gerak langsung ke enemy
-            moveToward(enemyPos, CONFIG.ApproachSpeed)
+            if not State.LastMoveToPos 
+                or (State.LastMoveToPos - enemyPos).Magnitude > 3 then
+                State.Humanoid:MoveTo(enemyPos)
+                State.LastMoveToPos = enemyPos
+            end
             return
         end
     end
     
-    -- follow waypoint pakai Move()
     if State.PathWaypoints and State.PathIndex <= #State.PathWaypoints then
         local wp = State.PathWaypoints[State.PathIndex]
         local distToWp = (myPos - wp.Position).Magnitude
         
-        if distToWp <= CONFIG.WaypointReachedDist then
+        if distToWp <= 4 then
             State.PathIndex = State.PathIndex + 1
             if State.PathIndex <= #State.PathWaypoints then
                 local nextWp = State.PathWaypoints[State.PathIndex]
-                moveToward(nextWp.Position, CONFIG.ApproachSpeed)
+                if not State.LastMoveToPos 
+                    or (State.LastMoveToPos - nextWp.Position).Magnitude > 0.5 then
+                    State.Humanoid:MoveTo(nextWp.Position)
+                    State.LastMoveToPos = nextWp.Position
+                end
                 if nextWp.Action == Enum.PathWaypointAction.Jump then
                     State.Humanoid.Jump = true
                 end
             end
         else
-            moveToward(wp.Position, CONFIG.ApproachSpeed)
+            if not State.LastMoveToPos 
+                or (State.LastMoveToPos - wp.Position).Magnitude > 0.5 then
+                State.Humanoid:MoveTo(wp.Position)
+                State.LastMoveToPos = wp.Position
+            end
             if wp.Action == Enum.PathWaypointAction.Jump then
                 State.Humanoid.Jump = true
             end
@@ -345,6 +345,7 @@ local function mainLoop()
             continue
         end
 
+        -- pastiin AO masih ada
         if not State.Orientation or not State.Orientation.Parent then
             setupOrientation()
         end
@@ -407,8 +408,6 @@ local function mainLoop()
                     State.LastZone = "Attack"
                     attackEnemy(enemy)
                     resetPath()
-                    -- ⭐ stop movement pas attack (biar diam)
-                    State.Humanoid:Move(Vector3.zero)
                     setStatus(string.format("Attacking (%.1f) | %d%s", dist, count, roomStr))
                 elseif shouldApproach then
                     State.LastZone = "Approach"
@@ -491,8 +490,8 @@ local function createUI()
     fbStroke.Parent = floatBtn
 
     local main = Instance.new("Frame")
-    main.Size = UDim2.new(0, 300, 0, 540)
-    main.Position = UDim2.new(0.5, -150, 0.5, -270)
+    main.Size = UDim2.new(0, 300, 0, 500)
+    main.Position = UDim2.new(0.5, -150, 0.5, -250)
     main.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
     main.BorderSizePixel = 0
     main.Active = true
@@ -677,13 +676,12 @@ local function createUI()
     createInput("Attack Distance", CONFIG.AttackDistance, 1, function(v) CONFIG.AttackDistance = v end)
     createInput("Keep Distance", CONFIG.KeepDistance, 2, function(v) CONFIG.KeepDistance = v end)
     createInput("Attack Cooldown", CONFIG.AttackCooldown, 3, function(v) CONFIG.AttackCooldown = v end)
-    createInput("Approach Speed", CONFIG.ApproachSpeed, 4, function(v) CONFIG.ApproachSpeed = v end)
-    createInput("Kite Speed", CONFIG.KiteSpeed, 5, function(v) CONFIG.KiteSpeed = v end)
-    createInput("Face Smoothness", CONFIG.FaceSmoothness, 6, function(v) 
+    createInput("Kite Speed", CONFIG.KiteSpeed, 4, function(v) CONFIG.KiteSpeed = v end)
+    createInput("Face Smoothness", CONFIG.FaceSmoothness, 5, function(v) 
         CONFIG.FaceSmoothness = v
         if State.Orientation then State.Orientation.Responsiveness = v end
     end)
-    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 7, function(v) CONFIG.AutoUpgrade = v end)
+    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 6, function(v) CONFIG.AutoUpgrade = v end)
 
     local startBtn = Instance.new("TextButton")
     startBtn.Size = UDim2.new(1, 0, 0, 55)
@@ -693,7 +691,7 @@ local function createUI()
     startBtn.TextSize = 17
     startBtn.Font = Enum.Font.GothamBold
     startBtn.BorderSizePixel = 0
-    startBtn.LayoutOrder = 8
+    startBtn.LayoutOrder = 7
     startBtn.ZIndex = 11
     startBtn.Parent = scroll
 
@@ -704,11 +702,11 @@ local function createUI()
     local footer = Instance.new("TextLabel")
     footer.Size = UDim2.new(1, 0, 0, 20)
     footer.BackgroundTransparency = 1
-    footer.Text = "v21 - Move approach"
+    footer.Text = "v20 - no walkspeed"
     footer.TextColor3 = Color3.fromRGB(120, 120, 130)
     footer.TextSize = 11
     footer.Font = Enum.Font.Gotham
-    footer.LayoutOrder = 9
+    footer.LayoutOrder = 8
     footer.ZIndex = 11
     footer.Parent = scroll
 
@@ -753,4 +751,4 @@ end
 
 -- ============ INIT ============
 createUI()
-print("[AutoFarm Mobile v21] Loaded - Move approach")
+print("[AutoFarm Mobile v20] Loaded")
