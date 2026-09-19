@@ -1,35 +1,39 @@
--- ============================================
--- AUTO FARM KAITUN - v47
--- WalkSpeed apply sekali (gak di loop)
--- ============================================
+-- ╔══════════════════════════════════════════╗
+-- ║   AUTO FARM KAITUN v49                    ║
+-- ║   WalkSpeed loop + spam MoveTo pathfinder ║
+-- ╚══════════════════════════════════════════╝
 
 -- ═══════════════════════════════════════════
 --           ⚙️ KONFIGURASI
 -- ═══════════════════════════════════════════
 local CONFIG = {
+    -- Combat
     KeepDistance = 60,
     AttackCooldown = 0.5,
     LoopDelay = 0.05,
     
-    UseWalkSpeed = false,
+    -- WalkSpeed
+    UseWalkSpeed = true,
     WalkSpeed = 20,
     
-    WaypointReached = 2,
+    -- Pathfinding
+    WaypointReached = 1,
     TargetMoveThreshold = 1,
     
+    -- Auto
     AutoUpgrade = true,
     AutoReconnect = true,
     AntiAFK = true,
     
+    -- Anti Lag
     AntiLag = true,
     AntiLag_HidePlayers = true,
     AntiLag_DisableParticles = true,
     AntiLag_DisableDecals = true,
     AntiLag_LowGraphics = true,
     AntiLag_HideTerrain = true,
-    AntiLag_DisableAnimations = true,
-    AntiLag_HideAccessories = true,
     
+    -- Skill
     SkillName = "spellPower",
     UpgradeInterval = 3,
 }
@@ -49,9 +53,8 @@ local State = {
     LastAttack = 0, LastUpgrade = 0,
     EnemyFolders = {}, LastFolderScan = 0,
     PathWaypoints = nil, PathIndex = 1, PathTargetPos = nil,
-    PathGoalType = nil, PathBusy = false, LastMoveToPos = nil,
+    PathGoalType = nil, PathBusy = false,
     LockedEnemyPos = nil, ShiftlockSaved = nil, OriginalWalkSpeed = nil,
-    WalkSpeedApplied = false,  -- ⭐ flag
 }
 
 -- ═══════════════════════════════════════════
@@ -116,24 +119,6 @@ function AntiLag.cleanInstance(obj)
         if CONFIG.AntiLag_DisableDecals then
             if obj:IsA("Decal") or obj:IsA("Texture") then
                 obj.Transparency = 1
-            end
-        end
-        if CONFIG.AntiLag_DisableAnimations then
-            if obj:IsA("Animator") and obj.Parent then
-                local char = LocalPlayer.Character
-                if char and not obj:IsDescendantOf(char) then
-                    pcall(function() obj:Destroy() end)
-                end
-            end
-        end
-        if CONFIG.AntiLag_HideAccessories then
-            if obj:IsA("Accessory") or obj:IsA("Hat") then
-                if obj.Parent then
-                    local char = LocalPlayer.Character
-                    if char and not obj:IsDescendantOf(char) then
-                        obj:Destroy()
-                    end
-                end
             end
         end
     end)
@@ -226,18 +211,6 @@ local function setShiftlock(enabled)
 end
 
 -- ═══════════════════════════════════════════
---              WALKSPEED (APPLY SEKALI) ⭐
--- ═══════════════════════════════════════════
-local function applyWalkSpeedOnce()
-    if not CONFIG.UseWalkSpeed then return end
-    if not State.Humanoid then return end
-    pcall(function()
-        State.Humanoid.WalkSpeed = CONFIG.WalkSpeed
-    end)
-    State.WalkSpeedApplied = true
-end
-
--- ═══════════════════════════════════════════
 --              CAMERA LOCK
 -- ═══════════════════════════════════════════
 RunService.RenderStepped:Connect(function()
@@ -256,16 +229,16 @@ local function setupCharacter(char)
     State.Character = char
     State.Humanoid = char:WaitForChild("Humanoid")
     State.RootPart = char:WaitForChild("HumanoidRootPart")
-    State.WalkSpeedApplied = false  -- reset flag untuk karakter baru
     
     if State.OriginalWalkSpeed == nil and State.Humanoid then
         State.OriginalWalkSpeed = State.Humanoid.WalkSpeed
     end
     
-    task.wait(1)  -- tunggu load selesai
-    
-    -- ⭐ apply sekali aja
-    applyWalkSpeedOnce()
+    task.wait(1)
+    -- apply walkspeed pertama kali
+    if CONFIG.UseWalkSpeed and State.Humanoid then
+        pcall(function() State.Humanoid.WalkSpeed = CONFIG.WalkSpeed end)
+    end
     
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
 end
@@ -372,23 +345,12 @@ local function resetPath()
     State.PathIndex = 1
     State.PathTargetPos = nil
     State.PathGoalType = nil
-    State.LastMoveToPos = nil
 end
 
 local function requestPath(targetPos, goalType)
     if not State.Humanoid or not State.RootPart then return end
     if not targetPos then return end
-    
-    if State.PathBusy then
-        if not State.PathWaypoints then
-            if not State.LastMoveToPos 
-                or (State.LastMoveToPos - targetPos).Magnitude > 2 then
-                State.Humanoid:MoveTo(targetPos)
-                State.LastMoveToPos = targetPos
-            end
-        end
-        return
-    end
+    if State.PathBusy then return end
     
     local needRecompute = false
     if not State.PathWaypoints then needRecompute = true
@@ -413,41 +375,29 @@ local function requestPath(targetPos, goalType)
             State.PathIndex = 2
             State.PathTargetPos = targetPos
             State.PathGoalType = goalType
-            State.LastMoveToPos = nil
         else
             State.PathWaypoints = nil
             State.PathTargetPos = targetPos
             State.PathGoalType = goalType
-            State.LastMoveToPos = nil
         end
         State.PathBusy = false
     end)
 end
 
+-- ⭐ SPAM MoveTo (versi v43 - gak ada LastMoveToPos tracking)
 local function followPath()
     if not State.Humanoid or not State.RootPart then return end
     
+    -- fallback: langsung ke target (kalau path gak ada)
     if not State.PathWaypoints then
         if State.PathTargetPos then
-            if not State.LastMoveToPos 
-                or (State.LastMoveToPos - State.PathTargetPos).Magnitude > 0.5 then
-                State.Humanoid:MoveTo(State.PathTargetPos)
-                State.LastMoveToPos = State.PathTargetPos
-            end
+            State.Humanoid:MoveTo(State.PathTargetPos)
         end
         return
     end
     
-    if State.PathIndex > #State.PathWaypoints then
-        if State.PathTargetPos then
-            if not State.LastMoveToPos 
-                or (State.LastMoveToPos - State.PathTargetPos).Magnitude > 0.5 then
-                State.Humanoid:MoveTo(State.PathTargetPos)
-                State.LastMoveToPos = State.PathTargetPos
-            end
-        end
-        return
-    end
+    -- path habis → return
+    if State.PathIndex > #State.PathWaypoints then return end
     
     local myPos = State.RootPart.Position
     local wp = State.PathWaypoints[State.PathIndex]
@@ -455,28 +405,17 @@ local function followPath()
     
     if distToWp <= CONFIG.WaypointReached then
         State.PathIndex = State.PathIndex + 1
-        State.LastMoveToPos = nil
-        if State.PathIndex <= #State.PathWaypoints then
-            local nextWp = State.PathWaypoints[State.PathIndex]
-            State.Humanoid:MoveTo(nextWp.Position)
-            State.LastMoveToPos = nextWp.Position
-            if nextWp.Action == Enum.PathWaypointAction.Jump then
-                State.Humanoid.Jump = true
-            end
-        end
         return
     end
     
-    if not State.LastMoveToPos 
-        or (State.LastMoveToPos - wp.Position).Magnitude > 0.5 then
-        State.Humanoid:MoveTo(wp.Position)
-        State.LastMoveToPos = wp.Position
-        if wp.Action == Enum.PathWaypointAction.Jump then
-            State.Humanoid.Jump = true
-        end
+    -- ⭐ SPAM MoveTo tiap frame
+    State.Humanoid:MoveTo(wp.Position)
+    if wp.Action == Enum.PathWaypointAction.Jump then
+        State.Humanoid.Jump = true
     end
 end
 
+-- ═══════════════════════════════════════════
 local function findSafePointAroundEnemy(enemyPos, myPos)
     local bestPoint = nil
     local bestDist = math.huge
@@ -498,6 +437,9 @@ local function findSafePointAroundEnemy(enemyPos, myPos)
     return bestPoint
 end
 
+-- ═══════════════════════════════════════════
+--              ATTACK
+-- ═══════════════════════════════════════════
 local function attackEnemy(enemy)
     local now = tick()
     if now - State.LastAttack < CONFIG.AttackCooldown then return false end
@@ -517,12 +459,17 @@ local function mainLoop()
         if not State.Character or not State.Character.Parent then task.wait(0.5) continue end
         if State.Humanoid.Health <= 0 then task.wait(1) continue end
         
-        -- ⭐ GAK ADA re-apply walkspeed di loop!
+        -- ⭐ WalkSpeed re-apply di loop
+        if CONFIG.UseWalkSpeed and State.Humanoid.WalkSpeed ~= CONFIG.WalkSpeed then
+            pcall(function() State.Humanoid.WalkSpeed = CONFIG.WalkSpeed end)
+        end
         
+        -- auto upgrade
         if CONFIG.AutoUpgrade and (tick() - State.LastUpgrade) >= CONFIG.UpgradeInterval then 
             upgradeSpell() 
         end
 
+        -- shiftlock auto ON
         local sl = LocalPlayer:FindFirstChild("shiftlockMobile")
         if sl and sl.Value == false then setShiftlock(true) end
 
@@ -537,10 +484,12 @@ local function mainLoop()
                 State.LockedEnemyPos = enemyPos
                 
                 if dist > CONFIG.KeepDistance then
+                    -- APPROACH
                     requestPath(enemyPos, "approach")
                     followPath()
                     attackEnemy(enemy)
                 else
+                    -- RETREAT
                     local safePoint = findSafePointAroundEnemy(enemyPos, myPos)
                     if safePoint then
                         requestPath(safePoint, "retreat")
@@ -566,8 +515,8 @@ task.spawn(function()
     setupAutoReconnect()
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v47 - LOADED    ║")
-    print("║   WalkSpeed: " .. (CONFIG.UseWalkSpeed and CONFIG.WalkSpeed or "OFF") .. " (apply sekali)")
+    print("║   AUTO FARM KAITUN v49 - LOADED    ║")
+    print("║   WalkSpeed loop + spam path       ║")
     print("╚════════════════════════════════════╝")
     
     State.Running = true
@@ -581,19 +530,23 @@ task.spawn(function()
         task.wait(0.5) 
     end
     
-    applyWalkSpeedOnce()
+    -- apply walkspeed sekali
+    if CONFIG.UseWalkSpeed and State.Humanoid then
+        pcall(function() State.Humanoid.WalkSpeed = CONFIG.WalkSpeed end)
+    end
+    
     setShiftlock(true)
     
     print("[KAITUN] Started auto farm...")
     mainLoop()
 end)
 
--- Respawn handling
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(2)
     if State.Running then
-        -- ⭐ apply sekali, bukan loop
-        applyWalkSpeedOnce()
+        if CONFIG.UseWalkSpeed and State.Humanoid then
+            pcall(function() State.Humanoid.WalkSpeed = CONFIG.WalkSpeed end)
+        end
         setShiftlock(true)
     end
 end)
