@@ -1,6 +1,6 @@
 -- ============================================
--- AUTO FARM DUNGEON - MOBILE EDITION (v42)
--- Shiftlock + camera lock ke enemy
+-- AUTO FARM DUNGEON - MOBILE EDITION (v43)
+-- Clean: 1 jarak setting + smooth pathfinder + camera lock
 -- ============================================
 
 local Players = game:GetService("Players")
@@ -12,25 +12,28 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
+-- ============ KONFIGURASI ============
 local CONFIG = {
-    KeepDistance = 45,
+    KeepDistance = 45,        -- ⭐ satu-satunya setting jarak
     AttackCooldown = 0.5,
     AutoUpgrade = true,
     WaypointReached = 4,
-    TargetMoveThreshold = 15,
+    TargetMoveThreshold = 3,
 }
 
 local State = {
     Running = false, Character = nil, Humanoid = nil, RootPart = nil,
     LastAttack = 0, LastUpgrade = 0,
     EnemyFolders = {}, LastFolderScan = 0,
+    -- path
     PathWaypoints = nil,
     PathIndex = 1,
     PathTargetPos = nil,
     PathGoalType = nil,
     PathBusy = false,
     LastMoveToPos = nil,
-    LockedEnemyPos = nil,      -- ⭐ posisi enemy buat lock kamera
+    -- camera lock
+    LockedEnemyPos = nil,
     ShiftlockSaved = nil,
 }
 
@@ -68,22 +71,18 @@ local function setShiftlock(enabled)
     end)
 end
 
--- ============ CAMERA LOCK KE ENEMY ============
--- Gerakin kamera ke arah enemy tiap frame
--- Shiftlock bakal auto-rotate karakter ke arah kamera
+-- ============ CAMERA LOCK ============
 RunService.RenderStepped:Connect(function()
     if not State.Running then return end
     if not State.LockedEnemyPos then return end
     if not Camera then return end
     
     local camPos = Camera.CFrame.Position
-    local targetPos = State.LockedEnemyPos
-    
-    -- cuma update arah, gak update posisi kamera
-    local newCF = CFrame.new(camPos, Vector3.new(targetPos.X, camPos.Y + 1.5, targetPos.Z))
-    Camera.CFrame = newCF
+    local tp = State.LockedEnemyPos
+    Camera.CFrame = CFrame.new(camPos, Vector3.new(tp.X, camPos.Y + 1.5, tp.Z))
 end)
 
+-- ============ CHARACTER ============
 local function setupCharacter(char)
     State.Character = char
     State.Humanoid = char:WaitForChild("Humanoid")
@@ -93,6 +92,7 @@ end
 if LocalPlayer.Character then setupCharacter(LocalPlayer.Character) end
 LocalPlayer.CharacterAdded:Connect(setupCharacter)
 
+-- ============ REMOTES ============
 local function startGame()
     local remotes = ReplicatedStorage:FindFirstChild("remotes")
     if not remotes then return end
@@ -111,6 +111,7 @@ local function upgradeSpell()
     end
 end
 
+-- ============ ENEMY FOLDER ============
 local function scanAllEnemyFolders()
     local folders = {}
     for _, obj in ipairs(workspace:GetDescendants()) do
@@ -131,6 +132,7 @@ local function getEnemyFolders()
     return State.EnemyFolders
 end
 
+-- ============ HUMANOID ============
 local function getHumanoidAndHRP(enemy)
     if not enemy or not enemy.Parent then return nil, nil end
     local hum = enemy:FindFirstChildOfClass("Humanoid") 
@@ -182,6 +184,7 @@ local function findNearestEnemy()
     return nearest, totalCount, roomInfo
 end
 
+-- ============ PATH ============
 local function resetPath()
     State.PathWaypoints = nil
     State.PathIndex = 1
@@ -229,6 +232,7 @@ local function requestPath(targetPos, goalType)
     end)
 end
 
+-- ============ FOLLOW PATH (smooth, no stutter) ============
 local function followPath()
     if not State.Humanoid or not State.RootPart then return end
     if not State.PathWaypoints then
@@ -264,6 +268,7 @@ local function followPath()
     end
 end
 
+-- ============ SAFE POINT ============
 local function findSafePointAroundEnemy(enemyPos, myPos)
     local bestPoint = nil
     local bestDist = math.huge
@@ -285,6 +290,7 @@ local function findSafePointAroundEnemy(enemyPos, myPos)
     return bestPoint
 end
 
+-- ============ ATTACK ============
 local function attackEnemy(enemy)
     local now = tick()
     if now - State.LastAttack < CONFIG.AttackCooldown then return false end
@@ -295,6 +301,7 @@ local function attackEnemy(enemy)
     return true
 end
 
+-- ============ MAIN LOOP ============
 local function mainLoop()
     while State.Running do
         task.wait(0.05)
@@ -314,7 +321,7 @@ local function mainLoop()
                 local enemyPos = ehrp.Position
                 local dist = (enemyPos - myPos).Magnitude
                 
-                -- ⭐ update posisi lock kamera
+                -- ⭐ lock camera ke enemy
                 State.LockedEnemyPos = enemyPos
                 
                 local roomStr = ""
@@ -322,20 +329,23 @@ local function mainLoop()
                     roomStr = " [" .. table.concat(roomInfo, ", ") .. "]"
                 end
 
+                -- ⭐ 1 setting jarak: KeepDistance
                 if dist > CONFIG.KeepDistance then
+                    -- MAJU + attack
                     setStatus(string.format("Approaching (%.1f) | %d%s", dist, count, roomStr))
                     requestPath(enemyPos, "approach")
                     followPath()
+                    attackEnemy(enemy)
                 else
+                    -- MUNDUR ke titik aman + attack
                     setStatus(string.format("Kiting (%.1f) | %d%s", dist, count, roomStr))
                     local safePoint = findSafePointAroundEnemy(enemyPos, myPos)
                     if safePoint then
                         requestPath(safePoint, "retreat")
                         followPath()
                     end
+                    attackEnemy(enemy)
                 end
-                
-                attackEnemy(enemy)
             end
         else
             State.LockedEnemyPos = nil
@@ -406,8 +416,8 @@ local function createUI()
     fbStroke.Parent = floatBtn
 
     local main = Instance.new("Frame")
-    main.Size = UDim2.new(0, 300, 0, 460)
-    main.Position = UDim2.new(0.5, -150, 0.5, -230)
+    main.Size = UDim2.new(0, 300, 0, 420)
+    main.Position = UDim2.new(0.5, -150, 0.5, -210)
     main.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
     main.BorderSizePixel = 0
     main.Active = true
@@ -596,7 +606,7 @@ local function createUI()
     local footer = Instance.new("TextLabel")
     footer.Size = UDim2.new(1, 0, 0, 20)
     footer.BackgroundTransparency = 1
-    footer.Text = "v42 - shiftlock + camera lock"
+    footer.Text = "v43 - final clean"
     footer.TextColor3 = Color3.fromRGB(120, 120, 130)
     footer.TextSize = 11
     footer.Font = Enum.Font.Gotham
@@ -639,4 +649,4 @@ local function createUI()
 end
 
 createUI()
-print("[AutoFarm Mobile v42] Loaded - shiftlock + camera lock")
+print("[AutoFarm Mobile v43] Loaded - clean")
