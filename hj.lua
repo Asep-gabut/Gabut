@@ -17,8 +17,8 @@ local CONFIG = {
     KeepDistance = 60,        -- ⭐ satu-satunya setting jarak
     AttackCooldown = 0.5,
     AutoUpgrade = true,
-    WaypointReached = 4,
-    TargetMoveThreshold = 6,
+    WaypointReached = 5,
+    TargetMoveThreshold = 1,
 }
 
 local State = {
