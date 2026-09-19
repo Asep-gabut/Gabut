@@ -14,13 +14,13 @@ local Camera = workspace.CurrentCamera
 
 -- ============ CONFIG (HARDCODE) ============
 local CONFIG = {
-    KeepDistance = 50,
+    KeepDistance = 45,
     AttackCooldown = 0.5,
     AutoUpgrade = true,
     UpgradeInterval = 3,
     SkillName = "spellPower",
-    WaypointReached = 1,
-    TargetMoveThreshold = 1,
+    WaypointReached = 2,
+    TargetMoveThreshold = 10,
     FolderScanInterval = 2,
 }
 
