@@ -1,6 +1,6 @@
 -- ============================================
--- AUTO FARM DUNGEON - MOBILE EDITION (v11)
--- Separate AttackDistance & KeepDistance
+-- AUTO FARM DUNGEON - MOBILE EDITION (v13)
+-- Multi-room support
 -- ============================================
 
 local Players = game:GetService("Players")
@@ -8,6 +8,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local PathfindingService = game:GetService("PathfindingService")
 local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 local TweenService = game:GetService("TweenService")
 local CoreGui = game:GetService("CoreGui")
 
@@ -16,14 +17,19 @@ local Camera = workspace.CurrentCamera
 
 -- ============ KONFIGURASI ============
 local CONFIG = {
-    AttackDistance = 50,     -- ⭐ max jarak untuk attack (Q+E)
-    KeepDistance = 30,       -- ⭐ jarak ideal (kalau musuh lebih deket → kabur)
-    DistanceTolerance = 1,   -- toleransi ±
+    AttackDistance = 50,
+    KeepDistance = 30,
+    DistanceTolerance = 3,
     AttackCooldown = 0.5,
+    WalkSpeed = 32,
     SkillName = "spellPower",
     AutoUpgrade = true,
     UpgradeInterval = 3,
     UseShiftlock = true,
+    UseTouchToFace = true,
+    StuckTimeout = 1.0,
+    PathRecomputeDelay = 0.3,
+    FolderScanInterval = 2,  -- scan semua room tiap 2 detik
 }
 
 local State = {
@@ -33,9 +39,15 @@ local State = {
     RootPart = nil,
     LastAttack = 0,
     LastUpgrade = 0,
-    EnemyFolder = nil,
+    LastPathCompute = 0,
+    LastPos = nil,
+    StuckTime = 0,
+    EnemyFolders = {},       -- ⭐ list semua enemyFolder
+    LastFolderScan = 0,
     CurrentEnemy = nil,
     ShiftlockSaved = nil,
+    WalkSpeedSaved = nil,
+    CurrentRoom = nil,
 }
 
 setStatus = function() end
@@ -61,12 +73,33 @@ local function setupCharacter(char)
     State.Character = char
     State.Humanoid = char:WaitForChild("Humanoid")
     State.RootPart = char:WaitForChild("HumanoidRootPart")
+    
+    if State.WalkSpeedSaved == nil and State.Humanoid then
+        State.WalkSpeedSaved = State.Humanoid.WalkSpeed
+    end
 end
 
 if LocalPlayer.Character then
     setupCharacter(LocalPlayer.Character)
 end
 LocalPlayer.CharacterAdded:Connect(setupCharacter)
+
+-- ============ WALKSPEED ============
+local function applyWalkSpeed()
+    if State.Humanoid then
+        pcall(function()
+            State.Humanoid.WalkSpeed = CONFIG.WalkSpeed
+        end)
+    end
+end
+
+local function restoreWalkSpeed()
+    if State.Humanoid and State.WalkSpeedSaved then
+        pcall(function()
+            State.Humanoid.WalkSpeed = State.WalkSpeedSaved
+        end)
+    end
+end
 
 -- ============ SHIFTLOCK ============
 local function setShiftlock(enabled)
@@ -121,19 +154,29 @@ local function upgradeSpell()
     end
 end
 
--- ============ ENEMY FOLDER ============
-local function findEnemyFolder()
-    if State.EnemyFolder and State.EnemyFolder.Parent then
-        return State.EnemyFolder
-    end
+-- ============ ENEMY FOLDER SCANNER (MULTI-ROOM) ⭐ ============
+-- Scan SEMUA folder bernama "enemyFolder" di workspace
+local function scanAllEnemyFolders()
+    local folders = {}
     for _, obj in ipairs(workspace:GetDescendants()) do
         if (obj:IsA("Folder") or obj:IsA("Model")) 
             and obj.Name:lower():find("enemyfolder") then
-            State.EnemyFolder = obj
-            return obj
+            table.insert(folders, obj)
         end
     end
-    return nil
+    return folders
+end
+
+local function getEnemyFolders(force)
+    local now = tick()
+    -- rescan kalau belum pernah, force, atau udah lewat interval
+    if force 
+        or #State.EnemyFolders == 0 
+        or (now - State.LastFolderScan) >= CONFIG.FolderScanInterval then
+        State.EnemyFolders = scanAllEnemyFolders()
+        State.LastFolderScan = now
+    end
+    return State.EnemyFolders
 end
 
 -- ============ HUMANOID & HRP ROBUST ============
@@ -149,8 +192,8 @@ local function getHumanoidAndHRP(enemy)
     if attrHp then hp = attrHp end
     if not hp or hp <= 0 then return nil, nil end
     
-    local ok, state = pcall(function() return hum:GetState() end)
-    if ok and state == Enum.HumanoidStateType.Dead then return nil, nil end
+    local ok, st = pcall(function() return hum:GetState() end)
+    if ok and st == Enum.HumanoidStateType.Dead then return nil, nil end
     
     local hrp = enemy:FindFirstChild("HumanoidRootPart")
         or enemy:FindFirstChild("HumanoidRootPart", true)
@@ -166,48 +209,139 @@ local function getHumanoidAndHRP(enemy)
     return hum, hrp
 end
 
+-- ============ FIND ENEMY DI SEMUA ROOM ⭐ ============
 local function findNearestEnemy()
-    local folder = findEnemyFolder()
-    if not folder then
-        setStatus("enemyFolder not found")
-        return nil, 0
+    local folders = getEnemyFolders(false)
+    if #folders == 0 then
+        setStatus("No enemyFolder found")
+        return nil, 0, nil
     end
-    if not State.RootPart then return nil, 0 end
+    if not State.RootPart then return nil, 0, nil end
 
     local nearest, nearestDist = nil, math.huge
-    local count = 0
-    for _, enemy in ipairs(folder:GetChildren()) do
-        if enemy:IsA("Model") or enemy:IsA("Folder") then
-            local hum, hrp = getHumanoidAndHRP(enemy)
-            if hum and hrp then
-                count = count + 1
-                local dist = (hrp.Position - State.RootPart.Position).Magnitude
-                if dist < nearestDist then
-                    nearestDist = dist
-                    nearest = enemy
+    local nearestFolder = nil
+    local totalCount = 0
+    local roomInfo = {}
+
+    for _, folder in ipairs(folders) do
+        if folder and folder.Parent then
+            local roomName = folder.Parent and folder.Parent.Name or "?"
+            local roomCount = 0
+            
+            for _, enemy in ipairs(folder:GetChildren()) do
+                if enemy:IsA("Model") or enemy:IsA("Folder") then
+                    local hum, hrp = getHumanoidAndHRP(enemy)
+                    if hum and hrp then
+                        roomCount = roomCount + 1
+                        totalCount = totalCount + 1
+                        local dist = (hrp.Position - State.RootPart.Position).Magnitude
+                        if dist < nearestDist then
+                            nearestDist = dist
+                            nearest = enemy
+                            nearestFolder = folder
+                        end
+                    end
                 end
+            end
+            
+            if roomCount > 0 then
+                table.insert(roomInfo, string.format("%s:%d", roomName, roomCount))
             end
         end
     end
     
-    if count == 0 then
-        State.EnemyFolder = nil
+    -- simpan folder tempat enemy berada
+    State.CurrentRoom = nearestFolder
+    
+    -- kalau 0 enemy, force rescan next loop
+    if totalCount == 0 then
+        State.LastFolderScan = 0
     end
-    return nearest, count
+    
+    return nearest, totalCount, roomInfo
 end
 
--- ============ FACE ENEMY ============
-local function faceEnemy(enemy)
+-- ============ FACE ENEMY (SendTouchEvent) ============
+local function touchFacing(enemy)
+    if not CONFIG.UseTouchToFace then return false end
+    if not enemy or not Camera then return false end
+    
+    local _, hrp = getHumanoidAndHRP(enemy)
+    if not hrp then return false end
+    
+    local screenPos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+    if not onScreen then return false end
+    
+    local tapX = math.floor(screenPos.X)
+    local tapY = math.floor(screenPos.Y)
+    
+    local ok = pcall(function()
+        VirtualInputManager:SendTouchEvent(tapX, tapY, Enum.UserInputState.Begin, false, game)
+        task.wait(0.02)
+        VirtualInputManager:SendTouchEvent(tapX, tapY, Enum.UserInputState.End, false, game)
+    end)
+    
+    if not ok then
+        pcall(function()
+            VirtualInputManager:SendMouseButtonEvent(tapX, tapY, 0, true, game, 0)
+            task.wait(0.02)
+            VirtualInputManager:SendMouseButtonEvent(tapX, tapY, 0, false, game, 0)
+        end)
+    end
+    
+    return true
+end
+
+local function faceEnemyCFrame(enemy)
     if not enemy or not State.RootPart then return end
     local _, hrp = getHumanoidAndHRP(enemy)
     if not hrp then return end
-    
     local myPos = State.RootPart.Position
     local targetPos = Vector3.new(hrp.Position.X, myPos.Y, hrp.Position.Z)
     State.RootPart.CFrame = CFrame.lookAt(myPos, targetPos)
 end
 
--- ============ KITING (kabur) ============
+local function faceEnemy(enemy)
+    local ok = false
+    if CONFIG.UseTouchToFace then
+        ok = touchFacing(enemy)
+    end
+    if not ok then
+        faceEnemyCFrame(enemy)
+    end
+end
+
+-- ============ ANTI-STUCK ============
+local function checkStuck()
+    if not State.RootPart then return false end
+    local myPos = State.RootPart.Position
+    if State.LastPos then
+        local moved = (myPos - State.LastPos).Magnitude
+        if moved < 0.5 then
+            State.StuckTime = State.StuckTime + 0.05
+        else
+            State.StuckTime = 0
+        end
+    end
+    State.LastPos = myPos
+    return State.StuckTime >= CONFIG.StuckTimeout
+end
+
+local function unstick()
+    if not State.Humanoid then return end
+    State.Humanoid.Jump = true
+    task.wait(0.05)
+    local myPos = State.RootPart.Position
+    local offset = Vector3.new(
+        (math.random() - 0.5) * 8,
+        0,
+        (math.random() - 0.5) * 8
+    )
+    State.Humanoid:MoveTo(myPos + offset)
+    State.StuckTime = 0
+end
+
+-- ============ KITING ============
 local function kiteAway(enemy)
     if not State.Humanoid or not State.RootPart then return end
     local _, hrp = getHumanoidAndHRP(enemy)
@@ -216,8 +350,6 @@ local function kiteAway(enemy)
     local myPos = State.RootPart.Position
     local awayDir = (myPos - hrp.Position)
     awayDir = Vector3.new(awayDir.X, 0, awayDir.Z).Unit
-    
-    -- target 0.5x KeepDistance biar balik ke titik aman
     local targetPos = myPos + awayDir * (CONFIG.KeepDistance * 0.5)
     
     local path = PathfindingService:CreatePath({
@@ -231,35 +363,40 @@ local function kiteAway(enemy)
     
     if ok and path.Status == Enum.PathStatus.Success then
         local waypoints = path:GetWaypoints()
-        for i, wp in ipairs(waypoints) do
-            if not State.Running then return end
-            if i == 1 then continue end
+        if #waypoints >= 2 then
+            local wp = waypoints[2]
             State.Humanoid:MoveTo(wp.Position)
             if wp.Action == Enum.PathWaypointAction.Jump then
                 State.Humanoid.Jump = true
             end
-            local _, curHrp = getHumanoidAndHRP(enemy)
-            if curHrp and State.RootPart then
-                local d = (curHrp.Position - State.RootPart.Position).Magnitude
-                if d >= (CONFIG.KeepDistance - CONFIG.DistanceTolerance) then break end
-            end
-            State.Humanoid.MoveToFinished:Wait()
         end
     else
         State.Humanoid:MoveTo(targetPos)
     end
 end
 
--- ============ MENDEKAT ============
+-- ============ WALK (NON-BLOCKING) ============
 local function walkToEnemy(enemy)
     if not State.Humanoid or not State.RootPart then return end
     local _, hrp = getHumanoidAndHRP(enemy)
     if not hrp then return end
     
+    if checkStuck() then
+        unstick()
+        return
+    end
+    
+    local now = tick()
+    if now - State.LastPathCompute < CONFIG.PathRecomputeDelay then
+        return
+    end
+    State.LastPathCompute = now
+    
     local myPos = State.RootPart.Position
     local path = PathfindingService:CreatePath({
         AgentRadius = 3, AgentHeight = 5, AgentCanJump = true,
         AgentJumpHeight = 10, AgentMaxSlope = 45,
+        Costs = { Water = 20 },
     })
     
     local ok = pcall(function()
@@ -268,20 +405,12 @@ local function walkToEnemy(enemy)
     
     if ok and path.Status == Enum.PathStatus.Success then
         local waypoints = path:GetWaypoints()
-        for i, wp in ipairs(waypoints) do
-            if not State.Running then return end
-            if i == 1 then continue end
-            -- stop kalau udah masuk attack distance
-            local _, curHrp = getHumanoidAndHRP(enemy)
-            if curHrp and State.RootPart then
-                local d = (curHrp.Position - State.RootPart.Position).Magnitude
-                if d <= CONFIG.AttackDistance then break end
-            end
+        if #waypoints >= 2 then
+            local wp = waypoints[2]
             State.Humanoid:MoveTo(wp.Position)
             if wp.Action == Enum.PathWaypointAction.Jump then
                 State.Humanoid.Jump = true
             end
-            State.Humanoid.MoveToFinished:Wait()
         end
     else
         State.Humanoid:MoveTo(hrp.Position)
@@ -315,17 +444,21 @@ local function mainLoop()
             continue
         end
 
-        -- AUTO UPGRADE
+        -- walkspeed reapply
+        if CONFIG.WalkSpeed ~= 16 and State.Humanoid.WalkSpeed ~= CONFIG.WalkSpeed then
+            applyWalkSpeed()
+        end
+
+        -- auto upgrade
         if CONFIG.AutoUpgrade and (tick() - State.LastUpgrade) >= CONFIG.UpgradeInterval then
             upgradeSpell()
         end
 
-        -- FIND ENEMY
-        local enemy, count = findNearestEnemy()
+        -- find enemy di SEMUA room
+        local enemy, count, roomInfo = findNearestEnemy()
         State.CurrentEnemy = enemy
 
         if enemy then
-            -- auto shiftlock ON
             if CONFIG.UseShiftlock then
                 local sl = LocalPlayer:FindFirstChild("shiftlockMobile")
                 if sl and sl.Value == false then
@@ -337,30 +470,34 @@ local function mainLoop()
             if ehrp then
                 local dist = (ehrp.Position - State.RootPart.Position).Magnitude
                 local kiteThreshold = CONFIG.KeepDistance - CONFIG.DistanceTolerance
+                
+                -- room info string
+                local roomStr = ""
+                if roomInfo and #roomInfo > 0 then
+                    roomStr = " [" .. table.concat(roomInfo, ", ") .. "]"
+                end
 
-                -- ⭐ LOGIC BARU:
-                -- 1. dist < KiteThreshold → KITING (kabur + attack)
-                -- 2. dist <= AttackDistance → ATTACK
-                -- 3. dist > AttackDistance  → MENDEKAT
                 if dist < kiteThreshold then
-                    setStatus(string.format("Kiting (%.1f) | %d enemies", dist, count or 0))
+                    setStatus(string.format("Kiting (%.1f) | %d%s", dist, count or 0, roomStr))
                     task.spawn(function() attackEnemy(enemy) end)
                     kiteAway(enemy)
                 elseif dist <= CONFIG.AttackDistance then
                     attackEnemy(enemy)
-                    setStatus(string.format("Attacking (%.1f) | %d enemies", dist, count or 0))
+                    setStatus(string.format("Attacking (%.1f) | %d%s", dist, count or 0, roomStr))
                 else
-                    setStatus(string.format("Approaching (%.1f) | %d enemies", dist, count or 0))
+                    setStatus(string.format("Approaching (%.1f) | %d%s", dist, count or 0, roomStr))
                     walkToEnemy(enemy)
                 end
             end
         else
             State.CurrentEnemy = nil
-            setStatus("Scanning... 0 enemies")
+            State.StuckTime = 0
+            setStatus(string.format("No enemy | %d rooms scanned", #State.EnemyFolders))
         end
     end
     
     if CONFIG.UseShiftlock then restoreShiftlock() end
+    restoreWalkSpeed()
 end
 
 -- ============================================
@@ -403,8 +540,8 @@ local function createUI()
 
     local main = Instance.new("Frame")
     main.Name = "Main"
-    main.Size = UDim2.new(0, 300, 0, 500)
-    main.Position = UDim2.new(0.5, -150, 0.5, -250)
+    main.Size = UDim2.new(0, 300, 0, 580)
+    main.Position = UDim2.new(0.5, -150, 0.5, -290)
     main.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
     main.BorderSizePixel = 0
     main.Active = true
@@ -442,7 +579,7 @@ local function createUI()
     titleText.Size = UDim2.new(1, -100, 1, 0)
     titleText.Position = UDim2.new(0, 15, 0, 0)
     titleText.BackgroundTransparency = 1
-    titleText.Text = "⚔ AUTO FARM v11"
+    titleText.Text = "⚔ AUTO FARM v13"
     titleText.TextColor3 = Color3.fromRGB(200, 220, 255)
     titleText.TextSize = 17
     titleText.Font = Enum.Font.GothamBold
@@ -581,13 +718,20 @@ local function createUI()
     createInput("Keep Distance", CONFIG.KeepDistance, 2, function(v) CONFIG.KeepDistance = v end)
     createInput("Distance Tolerance", CONFIG.DistanceTolerance, 3, function(v) CONFIG.DistanceTolerance = v end)
     createInput("Attack Cooldown", CONFIG.AttackCooldown, 4, function(v) CONFIG.AttackCooldown = v end)
-    createInput("Skill Name", CONFIG.SkillName, 5, function(v) CONFIG.SkillName = v end)
-    createInput("Upgrade Interval", CONFIG.UpgradeInterval, 6, function(v) CONFIG.UpgradeInterval = v end)
-    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 7, function(v) CONFIG.AutoUpgrade = v end)
-    createToggle("Use Shiftlock", CONFIG.UseShiftlock, 8, function(v) 
+    createInput("Walk Speed", CONFIG.WalkSpeed, 5, function(v) 
+        CONFIG.WalkSpeed = v
+        applyWalkSpeed()
+    end)
+    createInput("Stuck Timeout", CONFIG.StuckTimeout, 6, function(v) CONFIG.StuckTimeout = v end)
+    createInput("Folder Scan Interval", CONFIG.FolderScanInterval, 7, function(v) CONFIG.FolderScanInterval = v end)
+    createInput("Skill Name", CONFIG.SkillName, 8, function(v) CONFIG.SkillName = v end)
+    createInput("Upgrade Interval", CONFIG.UpgradeInterval, 9, function(v) CONFIG.UpgradeInterval = v end)
+    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 10, function(v) CONFIG.AutoUpgrade = v end)
+    createToggle("Use Shiftlock", CONFIG.UseShiftlock, 11, function(v) 
         CONFIG.UseShiftlock = v
         if v then enableShiftlock() else restoreShiftlock() end
     end)
+    createToggle("Touch Face", CONFIG.UseTouchToFace, 12, function(v) CONFIG.UseTouchToFace = v end)
 
     local startBtn = Instance.new("TextButton")
     startBtn.Size = UDim2.new(1, 0, 0, 55)
@@ -597,7 +741,7 @@ local function createUI()
     startBtn.TextSize = 17
     startBtn.Font = Enum.Font.GothamBold
     startBtn.BorderSizePixel = 0
-    startBtn.LayoutOrder = 9
+    startBtn.LayoutOrder = 13
     startBtn.Parent = scroll
 
     local startCorner = Instance.new("UICorner")
@@ -612,7 +756,7 @@ local function createUI()
     statusLbl.TextSize = 13
     statusLbl.Font = Enum.Font.GothamMedium
     statusLbl.BorderSizePixel = 0
-    statusLbl.LayoutOrder = 10
+    statusLbl.LayoutOrder = 14
     statusLbl.Parent = scroll
 
     local statusCorner = Instance.new("UICorner")
@@ -622,11 +766,11 @@ local function createUI()
     local footer = Instance.new("TextLabel")
     footer.Size = UDim2.new(1, 0, 0, 20)
     footer.BackgroundTransparency = 1
-    footer.Text = "Attack < Keep | Q+E"
+    footer.Text = "Multi-room v13"
     footer.TextColor3 = Color3.fromRGB(120, 120, 130)
     footer.TextSize = 11
     footer.Font = Enum.Font.Gotham
-    footer.LayoutOrder = 11
+    footer.LayoutOrder = 15
     footer.Parent = scroll
 
     setStatus = function(msg)
@@ -648,6 +792,7 @@ local function createUI()
             floatBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
             setStatus("Stopped")
             if CONFIG.UseShiftlock then restoreShiftlock() end
+            restoreWalkSpeed()
         else
             State.Running = true
             startBtn.Text = "■  STOP FARM"
@@ -663,6 +808,7 @@ local function createUI()
                     task.wait(0.5)
                 end
                 if CONFIG.UseShiftlock then enableShiftlock() end
+                applyWalkSpeed()
                 setStatus("Running")
                 mainLoop()
             end)
@@ -674,4 +820,4 @@ end
 
 -- ============ INIT ============
 createUI()
-print("[AutoFarm Mobile v11] Loaded")
+print("[AutoFarm Mobile v13] Loaded - multi-room support")
