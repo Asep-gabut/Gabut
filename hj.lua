@@ -22,8 +22,8 @@ local CONFIG = {
     WalkSpeed = 20,
     
     -- Pathfinding
-    WaypointReached = 2,
-    TargetMoveThreshold = 2,
+    WaypointReached = 4,
+    TargetMoveThreshold = 4,
     
     -- Auto Features
     AutoUpgrade = true,         -- auto upgrade spellPower
