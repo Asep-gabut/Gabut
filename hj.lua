@@ -22,7 +22,7 @@ local CONFIG = {
 }
 
 local State = {
-    Running = false, Character = nil, Humanoid = nil, RootPart = nil,
+    Running = true, Character = nil, Humanoid = nil, RootPart = nil,
     LastAttack = 0, LastUpgrade = 0,
     EnemyFolders = {}, LastFolderScan = 0,
     -- path
