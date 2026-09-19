@@ -1,6 +1,6 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v59                    ║
--- ║   Recompute every loop + spam MoveTo      ║
+-- ║   AUTO FARM KAITUN v60                    ║
+-- ║   Fix kite nabrak tembok                  ║
 -- ╚══════════════════════════════════════════╝
 
 local CONFIG = {
@@ -11,9 +11,14 @@ local CONFIG = {
     UseWalkSpeed = true,
     WalkSpeed = 20,
     
-    -- Pathfinding
+    -- ⭐ PATHFINDING
     WaypointReached = 5,
-    WaypointSkip = 0,
+    WaypointSkip = 0,           -- ⭐ NO SKIP
+    AgentRadius = 1,
+    AgentHeight = 6,
+    AgentCanJump = true,
+    AgentJumpHeight = 15,
+    AgentMaxSlope = 40,
     
     AutoUpgrade = true,
     AutoReconnect = true,
@@ -538,7 +543,7 @@ local function resetPath()
     State.PathGoalType = nil
 end
 
--- ⭐ RECOMPUTE EVERY LOOP (no throttle)
+-- ⭐ REQUEST PATH - tanpa WaypointSkip (skip = 0)
 local function requestPath(targetPos, goalType)
     if not State.Humanoid or not State.RootPart then return end
     if not targetPos then return end
@@ -552,11 +557,11 @@ local function requestPath(targetPos, goalType)
     
     task.spawn(function()
         local path = PathfindingService:CreatePath({
-            AgentRadius = 2,
-            AgentHeight = 5,
-            AgentCanJump = true,
-            AgentJumpHeight = 12,
-            AgentMaxSlope = 60,
+            AgentRadius = CONFIG.AgentRadius,
+            AgentHeight = CONFIG.AgentHeight,
+            AgentCanJump = CONFIG.AgentCanJump,
+            AgentJumpHeight = CONFIG.AgentJumpHeight,
+            AgentMaxSlope = CONFIG.AgentMaxSlope,
             Costs = { Water = 50 },
         })
         
@@ -564,12 +569,12 @@ local function requestPath(targetPos, goalType)
             path:ComputeAsync(myPos, targetPos)
         end)
         
-        -- cek masih request terbaru
         if myRequestId ~= State.PathRequestId then return end
         
         if ok and path.Status == Enum.PathStatus.Success then
             local waypoints = path:GetWaypoints()
             
+            -- skip 0 = gak skip
             if CONFIG.WaypointSkip > 0 and #waypoints > 2 + CONFIG.WaypointSkip then
                 local newWaypoints = {}
                 table.insert(newWaypoints, waypoints[1])
@@ -590,41 +595,45 @@ local function requestPath(targetPos, goalType)
     end)
 end
 
--- ⭐ SPAM MoveTo tiap loop (no tracking)
+-- ⭐⭐ FOLLOW PATH - NO FALLBACK ⭐⭐
 local function followPath()
     if not State.Humanoid or not State.RootPart then return end
     
+    -- ⭐ kalau gak ada waypoint, DIEM AJA (jangan lurus ke target!)
     if not State.PathWaypoints then
-        if State.PathTargetPos then
-            State.Humanoid:MoveTo(State.PathTargetPos)
-        end
+        -- STOP gerak biar gak nabrak tembok
         return
     end
     
-    if State.PathIndex > #State.PathWaypoints then return end
+    if State.PathIndex > #State.PathWaypoints then 
+        -- path habis, DIEM juga (nunggu recompute)
+        return 
+    end
     
     local myPos = State.RootPart.Position
     local wp = State.PathWaypoints[State.PathIndex]
     local distToWp = (myPos - wp.Position).Magnitude
     
-    -- advance waypoint (bisa multi-advance)
+    -- advance waypoint
     while distToWp <= CONFIG.WaypointReached and State.PathIndex < #State.PathWaypoints do
         State.PathIndex = State.PathIndex + 1
         wp = State.PathWaypoints[State.PathIndex]
         distToWp = (myPos - wp.Position).Magnitude
     end
     
-    -- ⭐ SPAM MoveTo tiap loop
+    -- spam MoveTo
     State.Humanoid:MoveTo(wp.Position)
     if wp.Action == Enum.PathWaypointAction.Jump then
         State.Humanoid.Jump = true
     end
 end
 
+-- ⭐⭐ SAFE POINT - cek obstacle dari titik kandidat ⭐⭐
 local function findSafePointAroundEnemy(enemyPos, myPos)
     local bestPoint = nil
     local bestDist = math.huge
     local samples = 16
+    
     for i = 0, samples - 1 do
         local angle = (i / samples) * math.pi * 2
         local offset = Vector3.new(math.cos(angle), 0, math.sin(angle))
@@ -633,12 +642,27 @@ local function findSafePointAroundEnemy(enemyPos, myPos)
             myPos.Y,
             enemyPos.Z + offset.Z * CONFIG.KeepDistance
         )
+        
+        -- ⭐ cek apakah titik ini bisa dicapai (ada path)
+        -- cek kasar dulu dengan raycast
+        local rayDir = point - enemyPos
+        local rayResult = workspace:Raycast(enemyPos, rayDir, {
+            FilterType = Enum.RaycastFilterType.Exclude,
+            FilterDescendantsInstances = {LocalPlayer.Character}
+        })
+        
+        -- kalau ada tembok di antara, skip titik ini
+        if rayResult then
+            continue
+        end
+        
         local d = (point - myPos).Magnitude
         if d < bestDist then
             bestDist = d
             bestPoint = point
         end
     end
+    
     return bestPoint
 end
 
@@ -697,6 +721,8 @@ local function mainLoop()
                         string.format("Kiting (%.1f) | %d enemy", dist, count),
                         Color3.fromRGB(255, 180, 100)
                     )
+                    
+                    -- ⭐ KITE: cari safe point yang gak ada tembok
                     local safePoint = findSafePointAroundEnemy(enemyPos, myPos)
                     if safePoint then
                         requestPath(safePoint, "retreat")
@@ -718,8 +744,8 @@ task.spawn(function()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v59 - LOADED    ║")
-    print("║   Recompute loop + spam MoveTo     ║")
+    print("║   AUTO FARM KAITUN v60 - LOADED    ║")
+    print("║   No fallback + no skip            ║")
     print("╚════════════════════════════════════╝")
     
     setStatus("Starting...", Color3.fromRGB(255, 220, 100))
