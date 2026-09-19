@@ -1,6 +1,6 @@
 -- ============================================
--- AUTO FARM DUNGEON - MOBILE EDITION (v4)
--- Scan folder "oom" + Auto upgrade di loop
+-- AUTO FARM DUNGEON - MOBILE EDITION (v5)
+-- Lock karakter lurus ke enemy + enemy scan loop
 -- ============================================
 
 local Players = game:GetService("Players")
@@ -17,11 +17,12 @@ local Camera = workspace.CurrentCamera
 -- ============ KONFIGURASI ============
 local CONFIG = {
     AttackRange = 30,
-    WalkDistance = 25,
+    WalkDistance = 15,
     AttackCooldown = 0.5,
     SkillName = "spellPower",
     AutoUpgrade = true,
-    UpgradeInterval = 3, -- detik antar upgrade
+    UpgradeInterval = 3,
+    FaceEnemy = true, -- paksa karakter selalu lurus ke enemy
 }
 
 local State = {
@@ -31,8 +32,7 @@ local State = {
     RootPart = nil,
     LastAttack = 0,
     LastUpgrade = 0,
-    CachedFolder = nil,
-    LastFolderCheck = 0,
+    CurrentEnemy = nil,
 }
 
 setStatus = function() end
@@ -88,6 +88,7 @@ local function upgradeSpell()
 end
 
 -- ============ ENEMY FINDER ============
+-- scan folder oom di dungeon (contains "oom")
 local function findEnemyFolder()
     local dungeon = workspace:FindFirstChild("dungeon")
     if not dungeon then return nil end
@@ -108,19 +109,6 @@ local function findEnemyFolder()
     return nil
 end
 
-local function getEnemyFolder()
-    local now = tick()
-    if State.CachedFolder 
-        and State.CachedFolder.Parent 
-        and (now - State.LastFolderCheck) < 2 then
-        return State.CachedFolder
-    end
-    
-    State.CachedFolder = findEnemyFolder()
-    State.LastFolderCheck = now
-    return State.CachedFolder
-end
-
 local function getHumanoidAndHRP(enemy)
     local hum = enemy:FindFirstChildOfClass("Humanoid") 
         or enemy:FindFirstChildWhichIsA("Humanoid", true)
@@ -136,9 +124,9 @@ local function getHumanoidAndHRP(enemy)
 end
 
 local function findNearestEnemy()
-    local folder = getEnemyFolder()
+    local folder = findEnemyFolder()
     if not folder then
-        setStatus("enemyFolder not found")
+        setStatus("No 'oom' folder")
         return nil
     end
     if not State.RootPart then return nil end
@@ -158,27 +146,21 @@ local function findNearestEnemy()
             end
         end
     end
-    
-    if count == 0 then
-        setStatus("Scanning... 0 enemies")
-    end
-    return nearest
+    return nearest, count
 end
 
--- ============ CAMERA ============
-local function lockCamera(enemy)
-    if not enemy then return end
+-- ============ FACE ENEMY (ganti lock camera) ============
+local function faceEnemy(enemy)
+    if not CONFIG.FaceEnemy then return end
+    if not enemy or not State.RootPart then return end
     local _, hrp = getHumanoidAndHRP(enemy)
-    if hrp and Camera then
-        Camera.CameraType = Enum.CameraType.Scriptable
-        Camera.CFrame = CFrame.new(Camera.CFrame.Position, hrp.Position)
-    end
-end
-
-local function unlockCamera()
-    if Camera then
-        Camera.CameraType = Enum.CameraType.Custom
-    end
+    if not hrp then return end
+    
+    local myPos = State.RootPart.Position
+    local targetPos = Vector3.new(hrp.Position.X, myPos.Y, hrp.Position.Z)
+    
+    -- putar karakter lurus ke enemy tanpa mengubah posisi
+    State.RootPart.CFrame = CFrame.new(myPos, targetPos)
 end
 
 -- ============ ATTACK ============
@@ -187,7 +169,7 @@ local function attackEnemy(enemy)
     if now - State.LastAttack < CONFIG.AttackCooldown then return end
     State.LastAttack = now
 
-    lockCamera(enemy)
+    faceEnemy(enemy)  -- karakter lurus ke enemy (bukan camera)
     pressQ()
     task.wait(0.08)
     pressE()
@@ -245,15 +227,16 @@ end
 -- ============ MAIN LOOP ============
 local function mainLoop()
     while State.Running do
-        task.wait(0.1)
+        task.wait(0.05)
 
+        -- re-setup kalau char respawn
         if not State.Character or not State.Character.Parent then
-            task.wait(1)
+            task.wait(0.5)
             continue
         end
 
         if State.Humanoid.Health <= 0 then
-            task.wait(2)
+            task.wait(1)
             continue
         end
 
@@ -262,28 +245,26 @@ local function mainLoop()
             upgradeSpell()
         end
 
-        -- ===== CARI & SERANG MUSUH =====
-        local enemy = findNearestEnemy()
+        -- ===== FIND ENEMY LOOP (tiap iterasi) =====
+        local enemy, count = findNearestEnemy()
+        State.CurrentEnemy = enemy
+
         if enemy then
             local _, ehrp = getHumanoidAndHRP(enemy)
             if ehrp then
                 local dist = (ehrp.Position - State.RootPart.Position).Magnitude
                 if dist <= CONFIG.AttackRange then
                     attackEnemy(enemy)
-                    setStatus(string.format("Attacking (%.1f)", dist))
+                    setStatus(string.format("Attacking (%.1f) | %d enemies", dist, count or 0))
                 else
                     walkToEnemy(enemy)
-                    setStatus(string.format("Walking (%.1f)", dist))
+                    setStatus(string.format("Walking (%.1f) | %d enemies", dist, count or 0))
                 end
             end
         else
-            unlockCamera()
-            if not getEnemyFolder() then
-                setStatus("No 'oom' folder")
-            end
+            setStatus("Scanning... 0 enemies")
         end
     end
-    unlockCamera()
 end
 
 -- ============================================
@@ -328,8 +309,8 @@ local function createUI()
     -- MAIN FRAME
     local main = Instance.new("Frame")
     main.Name = "Main"
-    main.Size = UDim2.new(0, 300, 0, 480)
-    main.Position = UDim2.new(0.5, -150, 0.5, -240)
+    main.Size = UDim2.new(0, 300, 0, 510)
+    main.Position = UDim2.new(0.5, -150, 0.5, -255)
     main.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
     main.BorderSizePixel = 0
     main.Active = true
@@ -368,7 +349,7 @@ local function createUI()
     titleText.Size = UDim2.new(1, -100, 1, 0)
     titleText.Position = UDim2.new(0, 15, 0, 0)
     titleText.BackgroundTransparency = 1
-    titleText.Text = "⚔ AUTO FARM"
+    titleText.Text = "⚔ AUTO FARM v5"
     titleText.TextColor3 = Color3.fromRGB(200, 220, 255)
     titleText.TextSize = 17
     titleText.Font = Enum.Font.GothamBold
@@ -510,6 +491,7 @@ local function createUI()
     createInput("Skill Name", CONFIG.SkillName, 4, function(v) CONFIG.SkillName = v end)
     createInput("Upgrade Interval", CONFIG.UpgradeInterval, 5, function(v) CONFIG.UpgradeInterval = v end)
     createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 6, function(v) CONFIG.AutoUpgrade = v end)
+    createToggle("Face Enemy", CONFIG.FaceEnemy, 7, function(v) CONFIG.FaceEnemy = v end)
 
     local startBtn = Instance.new("TextButton")
     startBtn.Size = UDim2.new(1, 0, 0, 55)
@@ -519,7 +501,7 @@ local function createUI()
     startBtn.TextSize = 17
     startBtn.Font = Enum.Font.GothamBold
     startBtn.BorderSizePixel = 0
-    startBtn.LayoutOrder = 7
+    startBtn.LayoutOrder = 8
     startBtn.Parent = scroll
 
     local startCorner = Instance.new("UICorner")
@@ -534,7 +516,7 @@ local function createUI()
     statusLbl.TextSize = 13
     statusLbl.Font = Enum.Font.GothamMedium
     statusLbl.BorderSizePixel = 0
-    statusLbl.LayoutOrder = 8
+    statusLbl.LayoutOrder = 9
     statusLbl.Parent = scroll
 
     local statusCorner = Instance.new("UICorner")
@@ -544,11 +526,11 @@ local function createUI()
     local footer = Instance.new("TextLabel")
     footer.Size = UDim2.new(1, 0, 0, 20)
     footer.BackgroundTransparency = 1
-    footer.Text = "Q (0x51) + E (0x45)"
+    footer.Text = "Q (0x51) + E (0x45) | Face mode"
     footer.TextColor3 = Color3.fromRGB(120, 120, 130)
     footer.TextSize = 11
     footer.Font = Enum.Font.Gotham
-    footer.LayoutOrder = 9
+    footer.LayoutOrder = 10
     footer.Parent = scroll
 
     setStatus = function(msg)
@@ -569,7 +551,6 @@ local function createUI()
             startBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
             floatBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
             setStatus("Stopped")
-            unlockCamera()
         else
             State.Running = true
             startBtn.Text = "■  STOP FARM"
@@ -580,7 +561,6 @@ local function createUI()
             task.spawn(function()
                 startGame()
                 task.wait(1.5)
-                -- upgrade pertama langsung
                 if CONFIG.AutoUpgrade then
                     upgradeSpell()
                     task.wait(0.5)
@@ -596,4 +576,4 @@ end
 
 -- ============ INIT ============
 createUI()
-print("[AutoFarm Mobile v4] Loaded. Tap ⚔ untuk buka UI")
+print("[AutoFarm Mobile v5] Loaded. Tap ⚔ untuk buka UI")
