@@ -14,11 +14,11 @@ local Camera = workspace.CurrentCamera
 
 -- ============ KONFIGURASI ============
 local CONFIG = {
-    KeepDistance = 45,        -- ⭐ satu-satunya setting jarak
+    KeepDistance = 60,        -- ⭐ satu-satunya setting jarak
     AttackCooldown = 0.5,
     AutoUpgrade = true,
     WaypointReached = 4,
-    TargetMoveThreshold = 3,
+    TargetMoveThreshold = 10,
 }
 
 local State = {
