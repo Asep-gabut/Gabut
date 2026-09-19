@@ -1,6 +1,6 @@
 -- ============================================
--- AUTO FARM DUNGEON - MOBILE EDITION (v5)
--- Lock karakter lurus ke enemy + enemy scan loop
+-- AUTO FARM DUNGEON - MOBILE EDITION (v6)
+-- Direct enemyFolder scan + Kiting (jaga jarak)
 -- ============================================
 
 local Players = game:GetService("Players")
@@ -18,11 +18,14 @@ local Camera = workspace.CurrentCamera
 local CONFIG = {
     AttackRange = 30,
     WalkDistance = 15,
+    MinDistance = 8,          -- jarak minimum kalo musuh deket → lari
+    KiteDistance = 20,         -- jarak aman setelah kabur
     AttackCooldown = 0.5,
     SkillName = "spellPower",
     AutoUpgrade = true,
     UpgradeInterval = 3,
-    FaceEnemy = true, -- paksa karakter selalu lurus ke enemy
+    FaceEnemy = true,
+    Kiting = true,             -- aktifkan fitur kabur
 }
 
 local State = {
@@ -32,7 +35,6 @@ local State = {
     RootPart = nil,
     LastAttack = 0,
     LastUpgrade = 0,
-    CurrentEnemy = nil,
 }
 
 setStatus = function() end
@@ -87,23 +89,13 @@ local function upgradeSpell()
     end
 end
 
--- ============ ENEMY FINDER ============
--- scan folder oom di dungeon (contains "oom")
+-- ============ ENEMY FOLDER (DIRECT SCAN) ============
 local function findEnemyFolder()
-    local dungeon = workspace:FindFirstChild("dungeon")
-    if not dungeon then return nil end
-    
-    for _, child in ipairs(dungeon:GetChildren()) do
-        if child:IsA("Folder") or child:IsA("Model") then
-            if child.Name:lower():find("oom") then
-                local ef = child:FindFirstChild("enemyFolder")
-                if ef then return ef end
-                for _, sub in ipairs(child:GetChildren()) do
-                    if sub.Name:lower():find("enemyfolder") then
-                        return sub
-                    end
-                end
-            end
+    -- Scan seluruh workspace cari folder bernama "enemyFolder"
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if (obj:IsA("Folder") or obj:IsA("Model")) 
+            and obj.Name:lower():find("enemyfolder") then
+            return obj
         end
     end
     return nil
@@ -126,10 +118,10 @@ end
 local function findNearestEnemy()
     local folder = findEnemyFolder()
     if not folder then
-        setStatus("No 'oom' folder")
-        return nil
+        setStatus("enemyFolder not found")
+        return nil, 0
     end
-    if not State.RootPart then return nil end
+    if not State.RootPart then return nil, 0 end
 
     local nearest, nearestDist = nil, math.huge
     local count = 0
@@ -149,7 +141,7 @@ local function findNearestEnemy()
     return nearest, count
 end
 
--- ============ FACE ENEMY (ganti lock camera) ============
+-- ============ FACE ENEMY ============
 local function faceEnemy(enemy)
     if not CONFIG.FaceEnemy then return end
     if not enemy or not State.RootPart then return end
@@ -158,9 +150,56 @@ local function faceEnemy(enemy)
     
     local myPos = State.RootPart.Position
     local targetPos = Vector3.new(hrp.Position.X, myPos.Y, hrp.Position.Z)
-    
-    -- putar karakter lurus ke enemy tanpa mengubah posisi
     State.RootPart.CFrame = CFrame.new(myPos, targetPos)
+end
+
+-- ============ KITING (kabur kalau musuh deket) ============
+local function kiteAway(enemy)
+    if not State.Humanoid or not State.RootPart then return end
+    local _, hrp = getHumanoidAndHRP(enemy)
+    if not hrp then return end
+    
+    -- hitung arah menjauh dari enemy
+    local myPos = State.RootPart.Position
+    local enemyPos = hrp.Position
+    local awayDir = (myPos - enemyPos)
+    awayDir = Vector3.new(awayDir.X, 0, awayDir.Z).Unit
+    
+    local targetPos = myPos + awayDir * CONFIG.KiteDistance
+    
+    -- pakai Pathfinder biar gak nabrak tembok
+    local path = PathfindingService:CreatePath({
+        AgentRadius = 3,
+        AgentHeight = 5,
+        AgentCanJump = true,
+        AgentJumpHeight = 10,
+        AgentMaxSlope = 45,
+    })
+    
+    local ok = pcall(function()
+        path:ComputeAsync(myPos, targetPos)
+    end)
+    
+    if ok and path.Status == Enum.PathStatus.Success then
+        local waypoints = path:GetWaypoints()
+        for i, wp in ipairs(waypoints) do
+            if not State.Running then return end
+            if i == 1 then continue end
+            State.Humanoid:MoveTo(wp.Position)
+            if wp.Action == Enum.PathWaypointAction.Jump then
+                State.Humanoid.Jump = true
+            end
+            -- stop kalau udah cukup jauh
+            local _, curHrp = getHumanoidAndHRP(enemy)
+            if curHrp and State.RootPart then
+                local d = (curHrp.Position - State.RootPart.Position).Magnitude
+                if d >= CONFIG.KiteDistance then break end
+            end
+            State.Humanoid.MoveToFinished:Wait()
+        end
+    else
+        State.Humanoid:MoveTo(targetPos)
+    end
 end
 
 -- ============ ATTACK ============
@@ -169,7 +208,7 @@ local function attackEnemy(enemy)
     if now - State.LastAttack < CONFIG.AttackCooldown then return end
     State.LastAttack = now
 
-    faceEnemy(enemy)  -- karakter lurus ke enemy (bukan camera)
+    faceEnemy(enemy)
     pressQ()
     task.wait(0.08)
     pressE()
@@ -229,7 +268,6 @@ local function mainLoop()
     while State.Running do
         task.wait(0.05)
 
-        -- re-setup kalau char respawn
         if not State.Character or not State.Character.Parent then
             task.wait(0.5)
             continue
@@ -240,23 +278,31 @@ local function mainLoop()
             continue
         end
 
-        -- ===== AUTO UPGRADE DI LOOP =====
+        -- AUTO UPGRADE
         if CONFIG.AutoUpgrade and (tick() - State.LastUpgrade) >= CONFIG.UpgradeInterval then
             upgradeSpell()
         end
 
-        -- ===== FIND ENEMY LOOP (tiap iterasi) =====
+        -- FIND ENEMY
         local enemy, count = findNearestEnemy()
-        State.CurrentEnemy = enemy
-
         if enemy then
             local _, ehrp = getHumanoidAndHRP(enemy)
             if ehrp then
                 local dist = (ehrp.Position - State.RootPart.Position).Magnitude
-                if dist <= CONFIG.AttackRange then
+
+                if CONFIG.Kiting and dist <= CONFIG.MinDistance then
+                    -- musuh kelewat deket → kabur sambil attack
+                    setStatus(string.format("Kiting! (%.1f) | %d enemies", dist, count or 0))
+                    task.spawn(function()
+                        attackEnemy(enemy)
+                    end)
+                    kiteAway(enemy)
+                elseif dist <= CONFIG.AttackRange then
+                    -- dalam range attack
                     attackEnemy(enemy)
                     setStatus(string.format("Attacking (%.1f) | %d enemies", dist, count or 0))
                 else
+                    -- masih jauh
                     walkToEnemy(enemy)
                     setStatus(string.format("Walking (%.1f) | %d enemies", dist, count or 0))
                 end
@@ -309,8 +355,8 @@ local function createUI()
     -- MAIN FRAME
     local main = Instance.new("Frame")
     main.Name = "Main"
-    main.Size = UDim2.new(0, 300, 0, 510)
-    main.Position = UDim2.new(0.5, -150, 0.5, -255)
+    main.Size = UDim2.new(0, 300, 0, 560)
+    main.Position = UDim2.new(0.5, -150, 0.5, -280)
     main.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
     main.BorderSizePixel = 0
     main.Active = true
@@ -349,7 +395,7 @@ local function createUI()
     titleText.Size = UDim2.new(1, -100, 1, 0)
     titleText.Position = UDim2.new(0, 15, 0, 0)
     titleText.BackgroundTransparency = 1
-    titleText.Text = "⚔ AUTO FARM v5"
+    titleText.Text = "⚔ AUTO FARM v6"
     titleText.TextColor3 = Color3.fromRGB(200, 220, 255)
     titleText.TextSize = 17
     titleText.Font = Enum.Font.GothamBold
@@ -487,11 +533,14 @@ local function createUI()
 
     createInput("Attack Range", CONFIG.AttackRange, 1, function(v) CONFIG.AttackRange = v end)
     createInput("Walk Distance", CONFIG.WalkDistance, 2, function(v) CONFIG.WalkDistance = v end)
-    createInput("Attack Cooldown", CONFIG.AttackCooldown, 3, function(v) CONFIG.AttackCooldown = v end)
-    createInput("Skill Name", CONFIG.SkillName, 4, function(v) CONFIG.SkillName = v end)
-    createInput("Upgrade Interval", CONFIG.UpgradeInterval, 5, function(v) CONFIG.UpgradeInterval = v end)
-    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 6, function(v) CONFIG.AutoUpgrade = v end)
-    createToggle("Face Enemy", CONFIG.FaceEnemy, 7, function(v) CONFIG.FaceEnemy = v end)
+    createInput("Min Distance", CONFIG.MinDistance, 3, function(v) CONFIG.MinDistance = v end)
+    createInput("Kite Distance", CONFIG.KiteDistance, 4, function(v) CONFIG.KiteDistance = v end)
+    createInput("Attack Cooldown", CONFIG.AttackCooldown, 5, function(v) CONFIG.AttackCooldown = v end)
+    createInput("Skill Name", CONFIG.SkillName, 6, function(v) CONFIG.SkillName = v end)
+    createInput("Upgrade Interval", CONFIG.UpgradeInterval, 7, function(v) CONFIG.UpgradeInterval = v end)
+    createToggle("Auto Upgrade", CONFIG.AutoUpgrade, 8, function(v) CONFIG.AutoUpgrade = v end)
+    createToggle("Face Enemy", CONFIG.FaceEnemy, 9, function(v) CONFIG.FaceEnemy = v end)
+    createToggle("Kiting", CONFIG.Kiting, 10, function(v) CONFIG.Kiting = v end)
 
     local startBtn = Instance.new("TextButton")
     startBtn.Size = UDim2.new(1, 0, 0, 55)
@@ -501,7 +550,7 @@ local function createUI()
     startBtn.TextSize = 17
     startBtn.Font = Enum.Font.GothamBold
     startBtn.BorderSizePixel = 0
-    startBtn.LayoutOrder = 8
+    startBtn.LayoutOrder = 11
     startBtn.Parent = scroll
 
     local startCorner = Instance.new("UICorner")
@@ -516,7 +565,7 @@ local function createUI()
     statusLbl.TextSize = 13
     statusLbl.Font = Enum.Font.GothamMedium
     statusLbl.BorderSizePixel = 0
-    statusLbl.LayoutOrder = 9
+    statusLbl.LayoutOrder = 12
     statusLbl.Parent = scroll
 
     local statusCorner = Instance.new("UICorner")
@@ -526,11 +575,11 @@ local function createUI()
     local footer = Instance.new("TextLabel")
     footer.Size = UDim2.new(1, 0, 0, 20)
     footer.BackgroundTransparency = 1
-    footer.Text = "Q (0x51) + E (0x45) | Face mode"
+    footer.Text = "Q (0x51) + E (0x45) | Kite mode"
     footer.TextColor3 = Color3.fromRGB(120, 120, 130)
     footer.TextSize = 11
     footer.Font = Enum.Font.Gotham
-    footer.LayoutOrder = 10
+    footer.LayoutOrder = 13
     footer.Parent = scroll
 
     setStatus = function(msg)
@@ -576,4 +625,4 @@ end
 
 -- ============ INIT ============
 createUI()
-print("[AutoFarm Mobile v5] Loaded. Tap ⚔ untuk buka UI")
+print("[AutoFarm Mobile v6] Loaded. Tap ⚔ untuk buka UI")
