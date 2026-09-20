@@ -1,6 +1,6 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v62                    ║
--- ║   ORBIT KITE - muterin musuh              ║
+-- ║   AUTO FARM KAITUN v63                    ║
+-- ║   Orbit Kite - FIXED                      ║
 -- ╚══════════════════════════════════════════╝
 
 local CONFIG = {
@@ -20,10 +20,10 @@ local CONFIG = {
     AgentJumpHeight = 15,
     AgentMaxSlope = 40,
     
-    -- ⭐ ORBIT
-    OrbitPoints = 25,          -- jumlah titik di lingkaran
-    OrbitDirection = 1,        -- 1 = clockwise, -1 = counter
-    OrbitPointReached = 6,     -- jarak dianggap nyampe titik (stud)
+    -- Orbit
+    OrbitPoints = 28,
+    OrbitDirection = 1,
+    OrbitPointReached = 6,
     
     AutoUpgrade = true,
     AutoReconnect = true,
@@ -61,9 +61,8 @@ local State = {
     PathGoalType = nil,
     PathRequestId = 0,
     LockedEnemyPos = nil, ShiftlockSaved = nil,
-    -- ⭐ ORBIT STATE
     OrbitEnemyRef = nil,
-    OrbitPointIndex = 1,
+    OrbitPointIndex = nil,
 }
 
 -- ═══════════════════════════════════════════
@@ -622,15 +621,12 @@ local function followPath()
     end
 end
 
--- ⭐⭐ ORBIT - cari titik berikutnya di lingkaran ⭐⭐
 local function findOrbitPoint(enemy, enemyPos, myPos)
-    -- reset kalau ganti enemy
     if State.OrbitEnemyRef ~= enemy then
         State.OrbitEnemyRef = enemy
         State.OrbitPointIndex = nil
     end
     
-    -- bikin 16 titik di lingkaran
     local samples = CONFIG.OrbitPoints
     local points = {}
     for i = 0, samples - 1 do
@@ -644,7 +640,6 @@ local function findOrbitPoint(enemy, enemyPos, myPos)
         table.insert(points, point)
     end
     
-    -- kalau baru mulai, pilih titik TERDEKAT dari kita dulu
     if not State.OrbitPointIndex then
         local bestIdx, bestDist = 1, math.huge
         for i, p in ipairs(points) do
@@ -657,11 +652,9 @@ local function findOrbitPoint(enemy, enemyPos, myPos)
         State.OrbitPointIndex = bestIdx
     end
     
-    -- cek udah nyampe titik sekarang belum
     local currentTarget = points[State.OrbitPointIndex]
     local distToTarget = (currentTarget - myPos).Magnitude
     
-    -- ⭐ kalau udah deket (< OrbitPointReached), advance ke titik berikutnya
     if distToTarget < CONFIG.OrbitPointReached then
         State.OrbitPointIndex = State.OrbitPointIndex + CONFIG.OrbitDirection
         if State.OrbitPointIndex > samples then
@@ -687,11 +680,24 @@ local function attackEnemy(enemy)
     return true
 end
 
+-- ⭐ resetOrbitState DIPINDAH KE SINI (di atas mainLoop)
+local function resetOrbitState()
+    State.OrbitEnemyRef = nil
+    State.OrbitPointIndex = nil
+end
+
 local function mainLoop()
     while State.Running do
         task.wait(CONFIG.LoopDelay)
-        if not State.Character or not State.Character.Parent then task.wait(0.5) continue end
-        if State.Humanoid.Health <= 0 then task.wait(1) continue end
+        
+        if not State.Character or not State.Character.Parent then 
+            task.wait(0.5) 
+            continue 
+        end
+        if State.Humanoid.Health <= 0 then 
+            task.wait(1) 
+            continue 
+        end
         
         if CONFIG.UseWalkSpeed and State.Humanoid.WalkSpeed ~= CONFIG.WalkSpeed then
             applyWalkSpeed()
@@ -715,7 +721,7 @@ local function mainLoop()
                 State.LockedEnemyPos = enemyPos
                 
                 if dist > CONFIG.KeepDistance then
-                    -- ⭐ APPROACH
+                    -- APPROACH
                     resetOrbitState()
                     requestPath(enemyPos, "approach")
                     followPath()
@@ -726,7 +732,7 @@ local function mainLoop()
                         Color3.fromRGB(100, 180, 255)
                     )
                 else
-                    -- ⭐ ORBIT - muterin musuh
+                    -- ORBIT
                     local orbitPoint = findOrbitPoint(enemy, enemyPos, myPos)
                     if orbitPoint then
                         requestPath(orbitPoint, "orbit")
@@ -746,17 +752,10 @@ local function mainLoop()
         else
             State.LockedEnemyPos = nil
             resetPath()
-            State.OrbitEnemyRef = nil
-            State.OrbitPointIndex = nil
+            resetOrbitState()
             setStatus("No enemy | scanning...", Color3.fromRGB(160, 160, 180))
         end
     end
-end
-
--- helper reset orbit
-local function resetOrbitState()
-    State.OrbitEnemyRef = nil
-    State.OrbitPointIndex = nil
 end
 
 task.spawn(function()
@@ -764,8 +763,8 @@ task.spawn(function()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v62 - ORBIT     ║")
-    print("║   Muterin musuh di lingkaran 45    ║")
+    print("║   AUTO FARM KAITUN v63 - ORBIT     ║")
+    print("║   FIXED (resetOrbitState)          ║")
     print("╚════════════════════════════════════╝")
     
     setStatus("Starting...", Color3.fromRGB(255, 220, 100))
