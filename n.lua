@@ -19,7 +19,7 @@ local killThread = nil
 local activeTween = nil
 
 -- // Setting
-local FOLLOW_HEIGHT   = 3.5i
+local FOLLOW_HEIGHT   = 3.5
 local FOLLOW_INTERVAL = 0.12    -- makin kecil makin nempel
 local ATTACK_INTERVAL = 0.35
 local FOLLOW_MIN_DIST = 0.15    -- toleransi geter
