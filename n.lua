@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -14,9 +15,8 @@ gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
 gui.Parent = playerGui
 
--- ============ FLOATING OPEN BUTTON ============
+-- ============ FLOATING BUTTON ============
 local fab = Instance.new("TextButton")
-fab.Name = "FloatingButton"
 fab.AnchorPoint = Vector2.new(1, 0.5)
 fab.Position = UDim2.new(1, -20, 0.5, 0)
 fab.Size = UDim2.fromOffset(56, 56)
@@ -28,7 +28,6 @@ fab.TextColor3 = Color3.fromRGB(255, 255, 255)
 fab.TextSize = 26
 fab.AutoButtonColor = false
 fab.Active = true
-fab.Draggable = false
 fab.Parent = gui
 
 Instance.new("UICorner", fab).CornerRadius = UDim.new(1, 0)
@@ -80,11 +79,9 @@ shadow.SliceCenter = Rect.new(49, 49, 450, 450)
 shadow.ZIndex = 0
 shadow.Parent = container
 
--- ============ Header (drag area) ============
+-- Header
 local header = Instance.new("Frame")
-header.Name = "Header"
 header.BackgroundTransparency = 1
-header.Position = UDim2.fromOffset(0, 0)
 header.Size = UDim2.new(1, 0, 0, 80)
 header.Active = true
 header.ZIndex = 1
@@ -95,7 +92,7 @@ title.BackgroundTransparency = 1
 title.Position = UDim2.fromOffset(24, 22)
 title.Size = UDim2.new(1, -80, 0, 28)
 title.Font = Enum.Font.GothamBold
-title.Text = "Karakter Teleport"
+title.Text = "Karakter Mover"
 title.TextColor3 = Color3.fromRGB(245, 245, 255)
 title.TextSize = 21
 title.TextXAlignment = Enum.TextXAlignment.Left
@@ -107,14 +104,14 @@ subtitle.BackgroundTransparency = 1
 subtitle.Position = UDim2.fromOffset(24, 50)
 subtitle.Size = UDim2.new(1, -80, 0, 18)
 subtitle.Font = Enum.Font.Gotham
-subtitle.Text = "Tween ke 502, 71, -375"
+subtitle.Text = "Physics ke 502, 71, -375"
 subtitle.TextColor3 = Color3.fromRGB(120, 120, 145)
 subtitle.TextSize = 13
 subtitle.TextXAlignment = Enum.TextXAlignment.Left
 subtitle.ZIndex = 2
 subtitle.Parent = header
 
--- ============ Close Button ============
+-- Close
 local closeButton = Instance.new("TextButton")
 closeButton.AnchorPoint = Vector2.new(1, 0)
 closeButton.Position = UDim2.new(1, -14, 0, 14)
@@ -131,11 +128,8 @@ closeButton.Parent = container
 
 Instance.new("UICorner", closeButton).CornerRadius = UDim.new(1, 0)
 
--- ============ Drag (mobile-safe) ============
-local dragging = false
-local dragInput
-local dragStart
-local startPos
+-- Drag
+local dragging, dragInput, dragStart, startPos = false, nil, nil, nil
 
 local function updateDrag(input)
 	local delta = input.Position - dragStart
@@ -152,7 +146,6 @@ header.InputBegan:Connect(function(input)
 		dragStart = input.Position
 		startPos = container.Position
 		dragInput = input
-
 		input.Changed:Connect(function()
 			if input.UserInputState == Enum.UserInputState.End then
 				dragging = false
@@ -169,8 +162,7 @@ header.InputChanged:Connect(function(input)
 end)
 
 UserInputService.InputChanged:Connect(function(input)
-	if not dragging then return end
-	if input == dragInput then
+	if dragging and input == dragInput then
 		if input.UserInputType == Enum.UserInputType.MouseMovement
 			or input.UserInputType == Enum.UserInputType.Touch then
 			updateDrag(input)
@@ -178,12 +170,11 @@ UserInputService.InputChanged:Connect(function(input)
 	end
 end)
 
--- ============ Toggle Panel Logic ============
+-- Panel toggle
 local function openPanel()
 	container.Visible = true
 	container.Size = UDim2.fromOffset(300, 300)
 	container.BackgroundTransparency = 1
-
 	TweenService:Create(container, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
 		Size = UDim2.fromOffset(340, 340)
 	}):Play()
@@ -193,21 +184,16 @@ local function openPanel()
 end
 
 local function closePanel()
-	local tween = TweenService:Create(container, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+	local t = TweenService:Create(container, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
 		Size = UDim2.fromOffset(300, 300)
 	})
-	tween:Play()
-	tween.Completed:Wait()
+	t:Play()
+	t.Completed:Wait()
 	container.Visible = false
 end
 
-fab.Activated:Connect(function()
-	openPanel()
-end)
-
-closeButton.Activated:Connect(function()
-	closePanel()
-end)
+fab.Activated:Connect(openPanel)
+closeButton.Activated:Connect(closePanel)
 
 -- ============ Speed Card ============
 local speedCard = Instance.new("Frame")
@@ -298,15 +284,13 @@ hitbox.ZIndex = 6
 hitbox.Parent = speedCard
 
 -- ============ Slider Logic ============
-local MIN_SPEED = 1
-local MAX_SPEED = 20
+local MIN_SPEED, MAX_SPEED = 1, 20
 local currentSpeed = 5
 local sliderDragging = false
 
 local function setFromX(mouseX)
 	local relX = math.clamp((mouseX - trackHolder.AbsolutePosition.X) / trackHolder.AbsoluteSize.X, 0, 1)
 	currentSpeed = math.floor(MIN_SPEED + relX * (MAX_SPEED - MIN_SPEED) + 0.5)
-
 	local pct = (currentSpeed - MIN_SPEED) / (MAX_SPEED - MIN_SPEED)
 	trackFill.Size = UDim2.fromScale(pct, 1)
 	knob.Position = UDim2.fromScale(pct, 0.5)
@@ -318,7 +302,6 @@ hitbox.InputBegan:Connect(function(input)
 		or input.UserInputType == Enum.UserInputType.Touch then
 		sliderDragging = true
 		setFromX(input.Position.X)
-
 		input.Changed:Connect(function()
 			if input.UserInputState == Enum.UserInputState.End then
 				sliderDragging = false
@@ -335,14 +318,14 @@ hitbox.InputChanged:Connect(function(input)
 	end
 end)
 
--- ============ TWEEN Button ============
+-- ============ MOVE Button ============
 local button = Instance.new("TextButton")
 button.AnchorPoint = Vector2.new(0.5, 0)
 button.Position = UDim2.new(0.5, 0, 0, 210)
 button.Size = UDim2.fromOffset(280, 60)
 button.BackgroundColor3 = Color3.fromRGB(88, 101, 242)
 button.BorderSizePixel = 0
-button.Text = "TWEEN"
+button.Text = "MOVE"
 button.Font = Enum.Font.GothamBold
 button.TextColor3 = Color3.fromRGB(255, 255, 255)
 button.TextSize = 17
@@ -366,34 +349,91 @@ buttonStroke.Thickness = 1
 buttonStroke.Transparency = 0.6
 buttonStroke.Parent = button
 
--- ============ Tween Action ============
-local isTweening = false
+-- ============ LINEAR VELOCITY ACTION ============
+local isMoving = false
 
-local function doTween()
-	if isTweening then return end
+local function doMove()
+	if isMoving then return end
 
 	local character = player.Character
 	if not character then return end
 
 	local hrp = character:FindFirstChild("HumanoidRootPart")
-	if not hrp then return end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not hrp or not humanoid then return end
 
-	isTweening = true
+	isMoving = true
 	button.Text = "..."
 
-	local wasAnchored = hrp.Anchored
-	hrp.Anchored = true
+	-- Simpan state
+	local oldWalkSpeed = humanoid.WalkSpeed
+	local oldJumpPower = humanoid.JumpPower
+	local oldAutoRotate = humanoid.AutoRotate
 
-	local duration = math.clamp(100 / (currentSpeed * 6), 0.3, 10)
-	local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-	local tween = TweenService:Create(hrp, tweenInfo, { CFrame = CFrame.new(targetPosition) })
+	-- Biar humanoid ga ngelawan
+	humanoid.WalkSpeed = 0
+	humanoid.AutoRotate = false
 
-	tween:Play()
-	tween.Completed:Wait()
+	-- Attachment + LinearVelocity
+	local attachment = Instance.new("Attachment")
+	attachment.Parent = hrp
 
-	hrp.Anchored = wasAnchored
-	button.Text = "TWEEN"
-	isTweening = false
+	local lv = Instance.new("LinearVelocity")
+	lv.Attachment0 = attachment
+	lv.MaxForce = math.huge
+	lv.RelativeTo = Enum.ActuatorRelativeTo.World
+	lv.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
+	lv.VectorVelocity = Vector3.zero
+	lv.Parent = hrp
+
+	-- AlignOrientation biar karakter hadap arah gerak
+	local ao = Instance.new("AlignOrientation")
+	ao.Attachment0 = attachment
+	ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
+	ao.MaxTorque = math.huge
+	ao.Responsiveness = 20
+	ao.Parent = hrp
+
+	-- Kecepatan (speed slider 1-20 → 15-300 studs/s)
+	local studsPerSec = currentSpeed * 15
+
+	local conn
+	conn = RunService.Heartbeat:Connect(function()
+		if not hrp.Parent then
+			conn:Disconnect()
+			return
+		end
+
+		local diff = targetPosition - hrp.Position
+		local dist = diff.Magnitude
+
+		-- Selesai
+		if dist < 4 then
+			conn:Disconnect()
+			lv:Destroy()
+			ao:Destroy()
+			attachment:Destroy()
+
+			hrp.CFrame = CFrame.new(targetPosition, targetPosition + hrp.CFrame.LookVector)
+
+			humanoid.WalkSpeed = oldWalkSpeed
+			humanoid.JumpPower = oldJumpPower
+			humanoid.AutoRotate = oldAutoRotate
+
+			button.Text = "MOVE"
+			isMoving = false
+			return
+		end
+
+		local dir = diff.Unit
+
+		-- Kecepatan proporsional kalau udah deket (biar ga overshoot)
+		local speedMul = math.clamp(dist / 20, 0.2, 1)
+		lv.VectorVelocity = dir * studsPerSec * speedMul
+
+		-- Hadap arah gerak
+		ao.CFrame = CFrame.lookAt(Vector3.zero, Vector3.new(dir.X, 0, dir.Z))
+	end)
 end
 
-button.Activated:Connect(doTween)
+button.Activated:Connect(doMove)
