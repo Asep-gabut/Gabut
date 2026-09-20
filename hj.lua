@@ -1,27 +1,36 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v65                    ║
--- ║   Approach v59 + Kite anti-tembok         ║
+-- ║   AUTO FARM KAITUN v71                    ║
+-- ║   SMART PATHFINDER - 16 Angles PARALLEL   ║
 -- ╚══════════════════════════════════════════╝
 
 local CONFIG = {
     KeepDistance = 45,
-    AttackCooldown = 0.5,
-    LoopDelay = 0.03,
+    AttackCooldown = 0.3,
+    LoopDelay = 0.001,
     
     UseWalkSpeed = true,
     WalkSpeed = 20,
     
     -- Pathfinding
-    WaypointReached = 4,
-    WaypointSkip = 0,
     AgentRadius = 2,
-    AgentHeight = 6,
+    AgentHeight = 5,
     AgentCanJump = true,
-    AgentJumpHeight = 15,
-    AgentMaxSlope = 40,
+    AgentJumpHeight = 12,
+    AgentMaxSlope = 55,
+    WaypointReached = 3,
+    
+    -- ⭐ SMART FEATURES
+    UsePathBlockedEvent = true,
+    UseDangerMemory = true,
+    DangerRadius = 8,
+    DangerMemoryTime = 30,
+    MultiAngleEval = 16,             -- ⭐ 16 sudut
+    AngleSpread = 80,                -- ⭐ 80° spread (tiap sudut 10°)
+    SmartRecompute = true,
+    PathComputeTimeout = 2.0,        -- ⭐ timeout 2 detik
     
     -- Kite
-    KiteRetreatDist = 35,
+    KiteRetreatDist = 80,
     
     AutoUpgrade = true,
     AutoReconnect = true,
@@ -58,7 +67,15 @@ local State = {
     PathWaypoints = nil, PathIndex = 1, PathTargetPos = nil,
     PathGoalType = nil,
     PathRequestId = 0,
+    ActivePath = nil,
     LockedEnemyPos = nil, ShiftlockSaved = nil,
+    RayFilter = nil,
+    DangerZones = {},
+    LastEnemyPos = nil,
+    LastEnemyVel = Vector3.new(0, 0, 0),
+    -- Stats
+    LastComputeTime = 0,
+    LastComputePathCount = 0,
 }
 
 -- ═══════════════════════════════════════════
@@ -74,8 +91,8 @@ statusGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 statusGui.Parent = CoreGui
 
 local container = Instance.new("Frame")
-container.Size = UDim2.new(0, 400, 0, 62)
-container.Position = UDim2.new(0.5, -200, 0, 15)
+container.Size = UDim2.new(0, 420, 0, 62)
+container.Position = UDim2.new(0.5, -210, 0, 15)
 container.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
 container.BorderSizePixel = 0
 container.ZIndex = 5
@@ -231,6 +248,10 @@ setStatus = function(msg, color)
             mainText = "Kiting"
             subText = string.format("%s stud  •  %s enemy  %s", dist, count, wp)
             color = color or Color3.fromRGB(255, 180, 100)
+        elseif msg:find("Blocked") then
+            mainText = "Blocked!"
+            subText = "path ke-block, recompute..."
+            color = color or Color3.fromRGB(255, 100, 100)
         elseif msg:find("No enemy") then
             mainText = "Scanning"
             subText = "mencari musuh..."
@@ -286,8 +307,6 @@ function AntiLag.setup()
             Lighting.FogEnd = 100000
             Lighting.EnvironmentDiffuseScale = 0
             Lighting.EnvironmentSpecularScale = 0
-            Lighting.Ambient = Color3.fromRGB(128, 128, 128)
-            Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
             for _, effect in ipairs(Lighting:GetChildren()) do
                 if effect:IsA("BlurEffect") or effect:IsA("SunRaysEffect")
                     or effect:IsA("ColorCorrectionEffect") or effect:IsA("BloomEffect")
@@ -295,14 +314,6 @@ function AntiLag.setup()
                     effect.Enabled = false
                 end
             end
-        end)
-    end
-    if CONFIG.AntiLag_HideTerrain then
-        pcall(function()
-            workspace.Terrain.WaterWaveSize = 0
-            workspace.Terrain.WaterWaveSpeed = 0
-            workspace.Terrain.WaterReflectance = 0
-            workspace.Terrain.WaterTransparency = 1
         end)
     end
     AntiLag.processInstance(workspace)
@@ -437,6 +448,286 @@ local function applyWalkSpeed()
     end
 end
 
+-- ═══════════════════════════════════════════
+--              RAYCAST
+-- ═══════════════════════════════════════════
+local function updateRayFilter()
+    if not State.RayFilter then
+        State.RayFilter = RaycastParams.new()
+    end
+    State.RayFilter.FilterType = Enum.RaycastFilterType.Exclude
+    State.RayFilter.FilterDescendantsInstances = {LocalPlayer.Character}
+    return State.RayFilter
+end
+
+local function isClearLine(from, to)
+    if not State.RayFilter then updateRayFilter() end
+    local dir = to - from
+    local ray = workspace:Raycast(from, dir, State.RayFilter)
+    return ray == nil
+end
+
+-- ⭐⭐ DANGER MEMORY ⭐⭐
+local function addDangerZone(pos)
+    if not CONFIG.UseDangerMemory then return end
+    table.insert(State.DangerZones, {
+        position = pos,
+        expireTime = tick() + CONFIG.DangerMemoryTime
+    })
+    while #State.DangerZones > 20 do
+        table.remove(State.DangerZones, 1)
+    end
+end
+
+local function cleanDangerZones()
+    local now = tick()
+    for i = #State.DangerZones, 1, -1 do
+        if State.DangerZones[i].expireTime < now then
+            table.remove(State.DangerZones, i)
+        end
+    end
+end
+
+local function isDangerPosition(pos)
+    if not CONFIG.UseDangerMemory then return false end
+    for _, zone in ipairs(State.DangerZones) do
+        if (pos - zone.position).Magnitude < CONFIG.DangerRadius then
+            return true
+        end
+    end
+    return false
+end
+
+-- ⭐⭐ EVALUATE PATH COST ⭐⭐
+local function evaluatePath(pathObj)
+    if not pathObj then return math.huge end
+    if pathObj.Status ~= Enum.PathStatus.Success then return math.huge end
+    
+    local waypoints = pathObj:GetWaypoints()
+    if #waypoints < 2 then return math.huge end
+    
+    local totalDist = 0
+    local dangerPenalty = 0
+    local jumpPenalty = 0
+    
+    for i = 1, #waypoints - 1 do
+        local wp1 = waypoints[i]
+        local wp2 = waypoints[i + 1]
+        totalDist = totalDist + (wp2.Position - wp1.Position).Magnitude
+    end
+    
+    for _, wp in ipairs(waypoints) do
+        if isDangerPosition(wp.Position) then
+            dangerPenalty = dangerPenalty + 50
+        end
+        if wp.Action == Enum.PathWaypointAction.Jump then
+            jumpPenalty = jumpPenalty + 5
+        end
+    end
+    
+    return totalDist + dangerPenalty + jumpPenalty
+end
+
+-- ⭐⭐ SMART: MULTI-ANGLE PARALLEL ⭐⭐
+local function findBestPath(startPos, endPos, goalType)
+    local numAngles = CONFIG.MultiAngleEval
+    
+    -- Kumpulin semua candidate
+    local candidates = {}
+    table.insert(candidates, endPos)  -- direct
+    
+    if numAngles > 1 then
+        local dir = endPos - startPos
+        dir = Vector3.new(dir.X, 0, dir.Z)
+        if dir.Magnitude > 0.1 then
+            dir = dir.Unit
+            
+            local half = math.floor(numAngles / 2)
+            for i = 1, half do
+                local angle = math.rad(CONFIG.AngleSpread) * (i / half)
+                
+                -- clockwise
+                local rotCW = Vector3.new(
+                    dir.X * math.cos(angle) - dir.Z * math.sin(angle),
+                    0,
+                    dir.X * math.sin(angle) + dir.Z * math.cos(angle)
+                )
+                table.insert(candidates, endPos - rotCW * 15)
+                
+                -- counter-clockwise
+                local rotCCW = Vector3.new(
+                    dir.X * math.cos(-angle) - dir.Z * math.sin(-angle),
+                    0,
+                    dir.X * math.sin(-angle) + dir.Z * math.cos(-angle)
+                )
+                table.insert(candidates, endPos - rotCCW * 15)
+            end
+        end
+    end
+    
+    -- ⭐ COMPUTE PARALEL
+    local results = {}
+    local finished = 0
+    local total = #candidates
+    local computeStart = tick()
+    
+    for idx, candPos in ipairs(candidates) do
+        task.spawn(function()
+            local path = PathfindingService:CreatePath({
+                AgentRadius = CONFIG.AgentRadius,
+                AgentHeight = CONFIG.AgentHeight,
+                AgentCanJump = CONFIG.AgentCanJump,
+                AgentJumpHeight = CONFIG.AgentJumpHeight,
+                AgentMaxSlope = CONFIG.AgentMaxSlope,
+            })
+            local ok = pcall(function()
+                path:ComputeAsync(startPos, candPos)
+            end)
+            
+            if ok and path.Status == Enum.PathStatus.Success then
+                results[idx] = {
+                    path = path,
+                    score = evaluatePath(path),
+                    candPos = candPos,
+                }
+            else
+                results[idx] = { path = nil, score = math.huge, candPos = candPos }
+            end
+            finished = finished + 1
+        end)
+    end
+    
+    -- ⭐ Tunggu semua selesai (timeout 2s)
+    local timeoutStart = tick()
+    while finished < total and (tick() - timeoutStart) < CONFIG.PathComputeTimeout do
+        task.wait(0.02)
+    end
+    
+    State.LastComputeTime = tick() - computeStart
+    State.LastComputePathCount = finished
+    
+    -- ⭐ Pilih yang terbaik
+    local bestPath = nil
+    local bestScore = math.huge
+    local bestIdx = 0
+    for idx, r in pairs(results) do
+        if r.path and r.score < bestScore then
+            bestScore = r.score
+            bestPath = r.path
+            bestIdx = idx
+        end
+    end
+    
+    return bestPath, bestIdx, bestScore, finished
+end
+
+-- ⭐ PATH.BLOCKED LISTENER
+local function attachBlockedListener(pathObj)
+    if not CONFIG.UsePathBlockedEvent then return end
+    if not pathObj then return end
+    
+    pcall(function()
+        pathObj.Blocked:Connect(function(blockedWaypointIdx)
+            if State.PathWaypoints and State.PathWaypoints[blockedWaypointIdx] then
+                addDangerZone(State.PathWaypoints[blockedWaypointIdx].Position)
+            end
+            State.PathWaypoints = nil
+            State.PathRequestId = State.PathRequestId + 1
+            setStatus("Blocked!", Color3.fromRGB(255, 100, 100))
+        end)
+    end)
+end
+
+local function resetPath()
+    State.PathWaypoints = nil
+    State.PathIndex = 1
+    State.PathTargetPos = nil
+    State.PathGoalType = nil
+end
+
+-- ⭐ REQUEST PATH
+local function requestPath(targetPos, goalType)
+    if not State.Humanoid or not State.RootPart then return end
+    if not targetPos then return end
+    
+    if State.PathGoalType ~= goalType then
+        State.PathWaypoints = nil
+        State.PathIndex = 1
+    end
+    
+    State.PathTargetPos = targetPos
+    State.PathGoalType = goalType
+    State.PathRequestId = State.PathRequestId + 1
+    local myRequestId = State.PathRequestId
+    local myGoalType = goalType
+    
+    local myPos = State.RootPart.Position
+    
+    task.spawn(function()
+        -- ⭐ PAKAI MULTI-ANGLE
+        local path, bestIdx, bestScore, computedCount = findBestPath(myPos, targetPos, goalType)
+        
+        -- discard kalau ada request lebih baru
+        if myRequestId ~= State.PathRequestId then return end
+        if myGoalType ~= State.PathGoalType then return end
+        
+        if path then
+            attachBlockedListener(path)
+            State.ActivePath = path
+            
+            local waypoints = path:GetWaypoints()
+            State.PathWaypoints = waypoints
+            State.PathIndex = 2
+        else
+            State.PathWaypoints = nil
+            addDangerZone(targetPos)
+        end
+    end)
+end
+
+local function followPath()
+    if not State.Humanoid or not State.RootPart then return end
+    if not State.PathWaypoints then return end
+    if State.PathIndex > #State.PathWaypoints then return end
+    
+    local myPos = State.RootPart.Position
+    local wp = State.PathWaypoints[State.PathIndex]
+    local distToWp = (myPos - wp.Position).Magnitude
+    
+    while distToWp <= CONFIG.WaypointReached and State.PathIndex < #State.PathWaypoints do
+        State.PathIndex = State.PathIndex + 1
+        wp = State.PathWaypoints[State.PathIndex]
+        distToWp = (myPos - wp.Position).Magnitude
+    end
+    
+    State.Humanoid:MoveTo(wp.Position)
+    if wp.Action == Enum.PathWaypointAction.Jump then
+        State.Humanoid.Jump = true
+    end
+end
+
+local function getKiteTarget(enemyPos, myPos)
+    local awayDir = myPos - enemyPos
+    awayDir = Vector3.new(awayDir.X, 0, awayDir.Z)
+    if awayDir.Magnitude < 0.1 then
+        awayDir = Vector3.new(1, 0, 0)
+    end
+    awayDir = awayDir.Unit
+    return myPos + awayDir * CONFIG.KiteRetreatDist
+end
+
+local function attackEnemy(enemy)
+    local now = tick()
+    if now - State.LastAttack < CONFIG.AttackCooldown then return false end
+    State.LastAttack = now
+    task.spawn(function()
+        pressQ()
+        task.wait(0.08)
+        pressE()
+    end)
+    return true
+end
+
 RunService.RenderStepped:Connect(function()
     if not State.Running then return end
     if not State.LockedEnemyPos then return end
@@ -452,6 +743,7 @@ local function setupCharacter(char)
     State.RootPart = char:WaitForChild("HumanoidRootPart")
     task.wait(1)
     applyWalkSpeed()
+    updateRayFilter()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
 end
 
@@ -540,110 +832,9 @@ local function findNearestEnemy()
     return nearest, totalCount
 end
 
-local function resetPath()
-    State.PathWaypoints = nil
-    State.PathIndex = 1
-    State.PathTargetPos = nil
-    State.PathGoalType = nil
-end
-
--- ⭐ REQUEST PATH - v59 STYLE (recompute tiap loop, discard lama)
-local function requestPath(targetPos, goalType)
-    if not State.Humanoid or not State.RootPart then return end
-    if not targetPos then return end
-    
-    State.PathTargetPos = targetPos
-    State.PathGoalType = goalType
-    State.PathRequestId = State.PathRequestId + 1
-    local myRequestId = State.PathRequestId
-    
-    local myPos = State.RootPart.Position
-    
-    task.spawn(function()
-        local path = PathfindingService:CreatePath({
-            AgentRadius = CONFIG.AgentRadius,
-            AgentHeight = CONFIG.AgentHeight,
-            AgentCanJump = CONFIG.AgentCanJump,
-            AgentJumpHeight = CONFIG.AgentJumpHeight,
-            AgentMaxSlope = CONFIG.AgentMaxSlope,
-        })
-        
-        local ok = pcall(function()
-            path:ComputeAsync(myPos, targetPos)
-        end)
-        
-        if myRequestId ~= State.PathRequestId then return end
-        
-        if ok and path.Status == Enum.PathStatus.Success then
-            local waypoints = path:GetWaypoints()
-            
-            if CONFIG.WaypointSkip > 0 and #waypoints > 2 + CONFIG.WaypointSkip then
-                local newWaypoints = {}
-                table.insert(newWaypoints, waypoints[1])
-                for i = 2 + CONFIG.WaypointSkip, #waypoints, CONFIG.WaypointSkip do
-                    table.insert(newWaypoints, waypoints[i])
-                end
-                if newWaypoints[#newWaypoints] ~= waypoints[#waypoints] then
-                    table.insert(newWaypoints, waypoints[#waypoints])
-                end
-                waypoints = newWaypoints
-            end
-            
-            State.PathWaypoints = waypoints
-            State.PathIndex = 2
-        else
-            State.PathWaypoints = nil
-        end
-    end)
-end
-
--- ⭐ FOLLOW PATH - v59 STYLE (spam MoveTo)
-local function followPath()
-    if not State.Humanoid or not State.RootPart then return end
-    
-    if not State.PathWaypoints then return end
-    if State.PathIndex > #State.PathWaypoints then return end
-    
-    local myPos = State.RootPart.Position
-    local wp = State.PathWaypoints[State.PathIndex]
-    local distToWp = (myPos - wp.Position).Magnitude
-    
-    while distToWp <= CONFIG.WaypointReached and State.PathIndex < #State.PathWaypoints do
-        State.PathIndex = State.PathIndex + 1
-        wp = State.PathWaypoints[State.PathIndex]
-        distToWp = (myPos - wp.Position).Magnitude
-    end
-    
-    State.Humanoid:MoveTo(wp.Position)
-    if wp.Action == Enum.PathWaypointAction.Jump then
-        State.Humanoid.Jump = true
-    end
-end
-
--- ⭐ KITE TARGET - mundur 35 stud dari posisi kita
-local function getKiteTarget(enemyPos, myPos)
-    local awayDir = myPos - enemyPos
-    awayDir = Vector3.new(awayDir.X, 0, awayDir.Z)
-    if awayDir.Magnitude < 0.1 then
-        awayDir = Vector3.new(1, 0, 0)
-    end
-    awayDir = awayDir.Unit
-    
-    return myPos + awayDir * CONFIG.KiteRetreatDist
-end
-
-local function attackEnemy(enemy)
-    local now = tick()
-    if now - State.LastAttack < CONFIG.AttackCooldown then return false end
-    State.LastAttack = now
-    task.spawn(function()
-        pressQ()
-        task.wait(0.08)
-        pressE()
-    end)
-    return true
-end
-
+-- ═══════════════════════════════════════════
+--              MAIN LOOP
+-- ═══════════════════════════════════════════
 local function mainLoop()
     while State.Running do
         task.wait(CONFIG.LoopDelay)
@@ -655,6 +846,10 @@ local function mainLoop()
         if State.Humanoid.Health <= 0 then 
             task.wait(1) 
             continue 
+        end
+        
+        if CONFIG.UseDangerMemory then
+            cleanDangerZones()
         end
         
         if CONFIG.UseWalkSpeed and State.Humanoid.WalkSpeed ~= CONFIG.WalkSpeed then
@@ -678,20 +873,31 @@ local function mainLoop()
                 
                 State.LockedEnemyPos = enemyPos
                 
+                if State.Humanoid.MoveDirection.Magnitude > 0.1 then
+                    local moved = State.RootPart.AssemblyLinearVelocity.Magnitude
+                    if moved < 1 and tick() - State.LastAttack > 1 then
+                        addDangerZone(myPos + State.Humanoid.MoveDirection * 3)
+                    end
+                end
+                
                 if dist > CONFIG.KeepDistance then
-                    -- ⭐ APPROACH - v59 STYLE
                     requestPath(enemyPos, "approach")
                     followPath()
                     attackEnemy(enemy)
                     
+                    local dangerCount = #State.DangerZones
+                    local computeInfo = string.format(" | %dms/%d",
+                        math.floor(State.LastComputeTime * 1000),
+                        State.LastComputePathCount)
+                    
                     setStatus(
-                        string.format("Approaching (%.1f) | %d enemy | wp %d/%d", 
+                        string.format("Approaching (%.1f) | %d enemy | wp %d/%d%s", 
                             dist, count, State.PathIndex, 
-                            State.PathWaypoints and #State.PathWaypoints or 0),
+                            State.PathWaypoints and #State.PathWaypoints or 0,
+                            computeInfo),
                         Color3.fromRGB(100, 180, 255)
                     )
                 else
-                    -- ⭐ KITE - mundur 35 stud dari kita
                     local kiteTarget = getKiteTarget(enemyPos, myPos)
                     if kiteTarget then
                         requestPath(kiteTarget, "retreat")
@@ -720,8 +926,8 @@ task.spawn(function()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v65 - LOADED    ║")
-    print("║   Approach v59 + Kite anti-tembok  ║")
+    print("║   AUTO FARM KAITUN v71 - LOADED    ║")
+    print("║   16 Angles PARALLEL Compute       ║")
     print("╚════════════════════════════════════╝")
     
     setStatus("Starting...", Color3.fromRGB(255, 220, 100))
@@ -739,6 +945,7 @@ task.spawn(function()
     
     applyWalkSpeed()
     setShiftlock(true)
+    updateRayFilter()
     
     setStatus("Running", Color3.fromRGB(100, 220, 100))
     print("[KAITUN] Started auto farm...")
@@ -750,5 +957,6 @@ LocalPlayer.CharacterAdded:Connect(function(char)
     if State.Running then
         applyWalkSpeed()
         setShiftlock(true)
+        updateRayFilter()
     end
 end)
