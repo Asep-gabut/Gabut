@@ -1,12 +1,12 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v71                    ║
--- ║   SMART PATHFINDER - 16 Angles PARALLEL   ║
+-- ║   AUTO FARM KAITUN v72                    ║
+-- ║   16 Angles + Fallback Chain              ║
 -- ╚══════════════════════════════════════════╝
 
 local CONFIG = {
     KeepDistance = 45,
-    AttackCooldown = 0.3,
-    LoopDelay = 0.001,
+    AttackCooldown = 0.5,
+    LoopDelay = 0.03,
     
     UseWalkSpeed = true,
     WalkSpeed = 20,
@@ -24,10 +24,9 @@ local CONFIG = {
     UseDangerMemory = true,
     DangerRadius = 8,
     DangerMemoryTime = 30,
-    MultiAngleEval = 16,             -- ⭐ 16 sudut
-    AngleSpread = 80,                -- ⭐ 80° spread (tiap sudut 10°)
-    SmartRecompute = true,
-    PathComputeTimeout = 2.0,        -- ⭐ timeout 2 detik
+    MultiAngleEval = 8,              -- ⭐ 8 sudut (aman dari throttle)
+    AngleSpread = 60,
+    PathComputeTimeout = 3.0,
     
     -- Kite
     KiteRetreatDist = 80,
@@ -39,9 +38,9 @@ local CONFIG = {
     AntiLag = true,
     AntiLag_HidePlayers = true,
     AntiLag_DisableParticles = true,
-    AntiLag_DisableDecals = true,
+    AntiLag_DisableDecals = false,
     AntiLag_LowGraphics = true,
-    AntiLag_HideTerrain = true,
+    AntiLag_HideTerrain = false,
     AntiLag_DisableAnimations = true,
     AntiLag_HideAccessories = true,
     
@@ -71,11 +70,13 @@ local State = {
     LockedEnemyPos = nil, ShiftlockSaved = nil,
     RayFilter = nil,
     DangerZones = {},
-    LastEnemyPos = nil,
-    LastEnemyVel = Vector3.new(0, 0, 0),
-    -- Stats
     LastComputeTime = 0,
     LastComputePathCount = 0,
+    LastComputeMode = "?",         -- ⭐ track mode (multi/single/direct)
+    -- Anti-stuck
+    LastPos = nil,
+    StuckTime = 0,
+    LastUnstickTime = 0,
 }
 
 -- ═══════════════════════════════════════════
@@ -91,8 +92,8 @@ statusGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 statusGui.Parent = CoreGui
 
 local container = Instance.new("Frame")
-container.Size = UDim2.new(0, 420, 0, 62)
-container.Position = UDim2.new(0.5, -210, 0, 15)
+container.Size = UDim2.new(0, 440, 0, 62)
+container.Position = UDim2.new(0.5, -220, 0, 15)
 container.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
 container.BorderSizePixel = 0
 container.ZIndex = 5
@@ -238,8 +239,9 @@ setStatus = function(msg, color)
             local dist = msg:match("(%d+%.%d+)") or "?"
             local count = msg:match("|%s*(%d+)%s*enemy") or "?"
             local wp = msg:match("wp%s*(%d+/%d+)") or ""
+            local compute = msg:match("|%s*(%d+ms/[^%s]+)") or ""
             mainText = "Approaching"
-            subText = string.format("%s stud  •  %s enemy  %s", dist, count, wp)
+            subText = string.format("%s stud  •  %s enemy  %s  %s", dist, count, wp, compute)
             color = color or Color3.fromRGB(100, 180, 255)
         elseif msg:find("Kiting") then
             local dist = msg:match("(%d+%.%d+)") or "?"
@@ -251,6 +253,10 @@ setStatus = function(msg, color)
         elseif msg:find("Blocked") then
             mainText = "Blocked!"
             subText = "path ke-block, recompute..."
+            color = color or Color3.fromRGB(255, 100, 100)
+        elseif msg:find("Unstuck") then
+            mainText = "Unstuck!"
+            subText = "recover dari stuck..."
             color = color or Color3.fromRGB(255, 100, 100)
         elseif msg:find("No enemy") then
             mainText = "Scanning"
@@ -460,14 +466,7 @@ local function updateRayFilter()
     return State.RayFilter
 end
 
-local function isClearLine(from, to)
-    if not State.RayFilter then updateRayFilter() end
-    local dir = to - from
-    local ray = workspace:Raycast(from, dir, State.RayFilter)
-    return ray == nil
-end
-
--- ⭐⭐ DANGER MEMORY ⭐⭐
+-- ⭐ DANGER MEMORY ⭐
 local function addDangerZone(pos)
     if not CONFIG.UseDangerMemory then return end
     table.insert(State.DangerZones, {
@@ -498,7 +497,7 @@ local function isDangerPosition(pos)
     return false
 end
 
--- ⭐⭐ EVALUATE PATH COST ⭐⭐
+-- ⭐ EVALUATE PATH COST ⭐
 local function evaluatePath(pathObj)
     if not pathObj then return math.huge end
     if pathObj.Status ~= Enum.PathStatus.Success then return math.huge end
@@ -511,9 +510,7 @@ local function evaluatePath(pathObj)
     local jumpPenalty = 0
     
     for i = 1, #waypoints - 1 do
-        local wp1 = waypoints[i]
-        local wp2 = waypoints[i + 1]
-        totalDist = totalDist + (wp2.Position - wp1.Position).Magnitude
+        totalDist = totalDist + (waypoints[i + 1].Position - waypoints[i].Position).Magnitude
     end
     
     for _, wp in ipairs(waypoints) do
@@ -528,25 +525,22 @@ local function evaluatePath(pathObj)
     return totalDist + dangerPenalty + jumpPenalty
 end
 
--- ⭐⭐ SMART: MULTI-ANGLE PARALLEL ⭐⭐
+-- ⭐ MULTI-ANGLE EVAL (paralel) ⭐
 local function findBestPath(startPos, endPos, goalType)
     local numAngles = CONFIG.MultiAngleEval
     
-    -- Kumpulin semua candidate
     local candidates = {}
-    table.insert(candidates, endPos)  -- direct
+    table.insert(candidates, endPos)
     
     if numAngles > 1 then
         local dir = endPos - startPos
         dir = Vector3.new(dir.X, 0, dir.Z)
         if dir.Magnitude > 0.1 then
             dir = dir.Unit
-            
             local half = math.floor(numAngles / 2)
             for i = 1, half do
                 local angle = math.rad(CONFIG.AngleSpread) * (i / half)
                 
-                -- clockwise
                 local rotCW = Vector3.new(
                     dir.X * math.cos(angle) - dir.Z * math.sin(angle),
                     0,
@@ -554,7 +548,6 @@ local function findBestPath(startPos, endPos, goalType)
                 )
                 table.insert(candidates, endPos - rotCW * 15)
                 
-                -- counter-clockwise
                 local rotCCW = Vector3.new(
                     dir.X * math.cos(-angle) - dir.Z * math.sin(-angle),
                     0,
@@ -565,7 +558,6 @@ local function findBestPath(startPos, endPos, goalType)
         end
     end
     
-    -- ⭐ COMPUTE PARALEL
     local results = {}
     local finished = 0
     local total = #candidates
@@ -588,16 +580,15 @@ local function findBestPath(startPos, endPos, goalType)
                 results[idx] = {
                     path = path,
                     score = evaluatePath(path),
-                    candPos = candPos,
                 }
             else
-                results[idx] = { path = nil, score = math.huge, candPos = candPos }
+                results[idx] = { path = nil, score = math.huge }
             end
             finished = finished + 1
         end)
     end
     
-    -- ⭐ Tunggu semua selesai (timeout 2s)
+    -- timeout
     local timeoutStart = tick()
     while finished < total and (tick() - timeoutStart) < CONFIG.PathComputeTimeout do
         task.wait(0.02)
@@ -606,22 +597,20 @@ local function findBestPath(startPos, endPos, goalType)
     State.LastComputeTime = tick() - computeStart
     State.LastComputePathCount = finished
     
-    -- ⭐ Pilih yang terbaik
+    -- pilih terbaik
     local bestPath = nil
     local bestScore = math.huge
-    local bestIdx = 0
-    for idx, r in pairs(results) do
+    for _, r in pairs(results) do
         if r.path and r.score < bestScore then
             bestScore = r.score
             bestPath = r.path
-            bestIdx = idx
         end
     end
     
-    return bestPath, bestIdx, bestScore, finished
+    return bestPath
 end
 
--- ⭐ PATH.BLOCKED LISTENER
+-- ⭐ PATH BLOCKED LISTENER ⭐
 local function attachBlockedListener(pathObj)
     if not CONFIG.UsePathBlockedEvent then return end
     if not pathObj then return end
@@ -645,7 +634,7 @@ local function resetPath()
     State.PathGoalType = nil
 end
 
--- ⭐ REQUEST PATH
+-- ⭐⭐ REQUEST PATH - WITH FALLBACK CHAIN ⭐⭐
 local function requestPath(targetPos, goalType)
     if not State.Humanoid or not State.RootPart then return end
     if not targetPos then return end
@@ -664,31 +653,87 @@ local function requestPath(targetPos, goalType)
     local myPos = State.RootPart.Position
     
     task.spawn(function()
-        -- ⭐ PAKAI MULTI-ANGLE
-        local path, bestIdx, bestScore, computedCount = findBestPath(myPos, targetPos, goalType)
+        -- STEP 1: MULTI-ANGLE
+        local path = findBestPath(myPos, targetPos, goalType)
+        local mode = "multi"
+        
+        -- STEP 2: FALLBACK SINGLE DIRECT
+        if not path then
+            mode = "single"
+            local directPath = PathfindingService:CreatePath({
+                AgentRadius = CONFIG.AgentRadius,
+                AgentHeight = CONFIG.AgentHeight,
+                AgentCanJump = CONFIG.AgentCanJump,
+                AgentJumpHeight = CONFIG.AgentJumpHeight,
+                AgentMaxSlope = CONFIG.AgentMaxSlope,
+            })
+            local ok = pcall(function()
+                directPath:ComputeAsync(myPos, targetPos)
+            end)
+            if ok and directPath.Status == Enum.PathStatus.Success then
+                path = directPath
+            end
+        end
+        
+        -- STEP 3: FALLBACK dengan AgentRadius lebih kecil
+        if not path then
+            mode = "narrow"
+            local narrowPath = PathfindingService:CreatePath({
+                AgentRadius = 1,
+                AgentHeight = 5,
+                AgentCanJump = true,
+                AgentJumpHeight = 12,
+                AgentMaxSlope = 55,
+            })
+            local ok = pcall(function()
+                narrowPath:ComputeAsync(myPos, targetPos)
+            end)
+            if ok and narrowPath.Status == Enum.PathStatus.Success then
+                path = narrowPath
+            end
+        end
         
         -- discard kalau ada request lebih baru
         if myRequestId ~= State.PathRequestId then return end
         if myGoalType ~= State.PathGoalType then return end
+        
+        State.LastComputeMode = mode
         
         if path then
             attachBlockedListener(path)
             State.ActivePath = path
             
             local waypoints = path:GetWaypoints()
-            State.PathWaypoints = waypoints
-            State.PathIndex = 2
+            if #waypoints >= 2 then
+                State.PathWaypoints = waypoints
+                State.PathIndex = 2
+            else
+                State.PathWaypoints = nil
+            end
         else
+            -- STEP 4: SEMUA GAGAL → fallback ke direct MoveTo (di followPath)
             State.PathWaypoints = nil
+            State.LastComputeMode = "direct"
             addDangerZone(targetPos)
         end
     end)
 end
 
+-- ⭐ FOLLOW PATH - WITH DIRECT FALLBACK ⭐
 local function followPath()
     if not State.Humanoid or not State.RootPart then return end
-    if not State.PathWaypoints then return end
-    if State.PathIndex > #State.PathWaypoints then return end
+    
+    -- ⭐ FALLBACK: kalau gak ada waypoint, gerak langsung ke target
+    if not State.PathWaypoints then
+        if State.PathTargetPos then
+            State.Humanoid:MoveTo(State.PathTargetPos)
+        end
+        return
+    end
+    
+    if State.PathIndex > #State.PathWaypoints then 
+        return 
+    end
     
     local myPos = State.RootPart.Position
     local wp = State.PathWaypoints[State.PathIndex]
@@ -726,6 +771,43 @@ local function attackEnemy(enemy)
         pressE()
     end)
     return true
+end
+
+-- ⭐ ANTI-STUCK ⭐
+local function checkStuck()
+    if not State.RootPart then return false end
+    if tick() - State.LastUnstickTime < 1.5 then
+        State.LastPos = State.RootPart.Position
+        State.StuckTime = 0
+        return false
+    end
+    
+    local myPos = State.RootPart.Position
+    if State.LastPos then
+        local moved = (myPos - State.LastPos).Magnitude
+        local speed = moved / CONFIG.LoopDelay
+        if speed < 1 then
+            State.StuckTime = State.StuckTime + CONFIG.LoopDelay
+        else
+            State.StuckTime = 0
+        end
+    end
+    State.LastPos = myPos
+    return State.StuckTime >= 1.0
+end
+
+local function unstick()
+    if not State.Humanoid or not State.RootPart then return end
+    State.Humanoid.Jump = true
+    task.wait(0.05)
+    local myPos = State.RootPart.Position
+    local angle = math.random() * math.pi * 2
+    local offset = Vector3.new(math.cos(angle) * 10, 0, math.sin(angle) * 10)
+    State.Humanoid:MoveTo(myPos + offset)
+    State.StuckTime = 0
+    State.LastUnstickTime = tick()
+    State.PathWaypoints = nil
+    State.PathTargetPos = nil
 end
 
 RunService.RenderStepped:Connect(function()
@@ -863,6 +945,13 @@ local function mainLoop()
         local sl = LocalPlayer:FindFirstChild("shiftlockMobile")
         if sl and sl.Value == false then setShiftlock(true) end
 
+        -- anti-stuck
+        if checkStuck() then
+            setStatus("Unstuck!", Color3.fromRGB(255, 100, 100))
+            unstick()
+            continue
+        end
+
         local enemy, count = findNearestEnemy()
         if enemy then
             local _, ehrp = getHumanoidAndHRP(enemy)
@@ -873,25 +962,18 @@ local function mainLoop()
                 
                 State.LockedEnemyPos = enemyPos
                 
-                if State.Humanoid.MoveDirection.Magnitude > 0.1 then
-                    local moved = State.RootPart.AssemblyLinearVelocity.Magnitude
-                    if moved < 1 and tick() - State.LastAttack > 1 then
-                        addDangerZone(myPos + State.Humanoid.MoveDirection * 3)
-                    end
-                end
-                
                 if dist > CONFIG.KeepDistance then
                     requestPath(enemyPos, "approach")
                     followPath()
                     attackEnemy(enemy)
                     
-                    local dangerCount = #State.DangerZones
-                    local computeInfo = string.format(" | %dms/%d",
+                    local computeInfo = string.format("%dms/%d/%s",
                         math.floor(State.LastComputeTime * 1000),
-                        State.LastComputePathCount)
+                        State.LastComputePathCount,
+                        State.LastComputeMode)
                     
                     setStatus(
-                        string.format("Approaching (%.1f) | %d enemy | wp %d/%d%s", 
+                        string.format("Approaching (%.1f) | %d enemy | wp %d/%d | %s", 
                             dist, count, State.PathIndex, 
                             State.PathWaypoints and #State.PathWaypoints or 0,
                             computeInfo),
@@ -926,8 +1008,8 @@ task.spawn(function()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v71 - LOADED    ║")
-    print("║   16 Angles PARALLEL Compute       ║")
+    print("║   AUTO FARM KAITUN v72 - LOADED    ║")
+    print("║   16 Angles + Fallback Chain       ║")
     print("╚════════════════════════════════════╝")
     
     setStatus("Starting...", Color3.fromRGB(255, 220, 100))
