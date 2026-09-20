@@ -1,6 +1,6 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v61                    ║
--- ║   Kite pakai logic Pathfinding yang sama  ║
+-- ║   AUTO FARM KAITUN v62                    ║
+-- ║   ORBIT KITE - muterin musuh              ║
 -- ╚══════════════════════════════════════════╝
 
 local CONFIG = {
@@ -12,13 +12,18 @@ local CONFIG = {
     WalkSpeed = 20,
     
     -- Pathfinding
-    WaypointReached = 5,
+    WaypointReached = 3,
     WaypointSkip = 0,
     AgentRadius = 1,
     AgentHeight = 6,
     AgentCanJump = true,
     AgentJumpHeight = 15,
     AgentMaxSlope = 40,
+    
+    -- ⭐ ORBIT
+    OrbitPoints = 25,          -- jumlah titik di lingkaran
+    OrbitDirection = 1,        -- 1 = clockwise, -1 = counter
+    OrbitPointReached = 6,     -- jarak dianggap nyampe titik (stud)
     
     AutoUpgrade = true,
     AutoReconnect = true,
@@ -56,6 +61,9 @@ local State = {
     PathGoalType = nil,
     PathRequestId = 0,
     LockedEnemyPos = nil, ShiftlockSaved = nil,
+    -- ⭐ ORBIT STATE
+    OrbitEnemyRef = nil,
+    OrbitPointIndex = 1,
 }
 
 -- ═══════════════════════════════════════════
@@ -217,16 +225,15 @@ setStatus = function(msg, color)
         if msg:find("Approaching") then
             local dist = msg:match("(%d+%.%d+)") or "?"
             local count = msg:match("|%s*(%d+)%s*enemy") or "?"
-            local wp = msg:match("wp%s*(%d+/%d+)") or ""
             mainText = "Approaching"
-            subText = string.format("%s stud  •  %s enemy  %s", dist, count, wp)
+            subText = string.format("%s stud  •  %s enemy", dist, count)
             color = color or Color3.fromRGB(100, 180, 255)
-        elseif msg:find("Kiting") then
+        elseif msg:find("Orbiting") then
             local dist = msg:match("(%d+%.%d+)") or "?"
             local count = msg:match("|%s*(%d+)%s*enemy") or "?"
-            local wp = msg:match("wp%s*(%d+/%d+)") or ""
-            mainText = "Kiting"
-            subText = string.format("%s stud  •  %s enemy  %s", dist, count, wp)
+            local point = msg:match("pt%s*(%d+/%d+)") or ""
+            mainText = "Orbiting"
+            subText = string.format("%s stud  •  %s enemy  %s", dist, count, point)
             color = color or Color3.fromRGB(255, 180, 100)
         elseif msg:find("No enemy") then
             mainText = "Scanning"
@@ -544,7 +551,6 @@ local function resetPath()
     State.PathGoalType = nil
 end
 
--- ⭐ REQUEST PATH - sama buat approach & kite
 local function requestPath(targetPos, goalType)
     if not State.Humanoid or not State.RootPart then return end
     if not targetPos then return end
@@ -595,10 +601,8 @@ local function requestPath(targetPos, goalType)
     end)
 end
 
--- ⭐ FOLLOW PATH - sama buat approach & kite
 local function followPath()
     if not State.Humanoid or not State.RootPart then return end
-    
     if not State.PathWaypoints then return end
     if State.PathIndex > #State.PathWaypoints then return end
     
@@ -618,11 +622,17 @@ local function followPath()
     end
 end
 
--- ⭐ SAFE POINT - simple, tanpa raycast
-local function findSafePointAroundEnemy(enemyPos, myPos)
-    local bestPoint = nil
-    local bestDist = math.huge
-    local samples = 16
+-- ⭐⭐ ORBIT - cari titik berikutnya di lingkaran ⭐⭐
+local function findOrbitPoint(enemy, enemyPos, myPos)
+    -- reset kalau ganti enemy
+    if State.OrbitEnemyRef ~= enemy then
+        State.OrbitEnemyRef = enemy
+        State.OrbitPointIndex = nil
+    end
+    
+    -- bikin 16 titik di lingkaran
+    local samples = CONFIG.OrbitPoints
+    local points = {}
     for i = 0, samples - 1 do
         local angle = (i / samples) * math.pi * 2
         local offset = Vector3.new(math.cos(angle), 0, math.sin(angle))
@@ -631,13 +641,38 @@ local function findSafePointAroundEnemy(enemyPos, myPos)
             myPos.Y,
             enemyPos.Z + offset.Z * CONFIG.KeepDistance
         )
-        local d = (point - myPos).Magnitude
-        if d < bestDist then
-            bestDist = d
-            bestPoint = point
+        table.insert(points, point)
+    end
+    
+    -- kalau baru mulai, pilih titik TERDEKAT dari kita dulu
+    if not State.OrbitPointIndex then
+        local bestIdx, bestDist = 1, math.huge
+        for i, p in ipairs(points) do
+            local d = (p - myPos).Magnitude
+            if d < bestDist then
+                bestDist = d
+                bestIdx = i
+            end
+        end
+        State.OrbitPointIndex = bestIdx
+    end
+    
+    -- cek udah nyampe titik sekarang belum
+    local currentTarget = points[State.OrbitPointIndex]
+    local distToTarget = (currentTarget - myPos).Magnitude
+    
+    -- ⭐ kalau udah deket (< OrbitPointReached), advance ke titik berikutnya
+    if distToTarget < CONFIG.OrbitPointReached then
+        State.OrbitPointIndex = State.OrbitPointIndex + CONFIG.OrbitDirection
+        if State.OrbitPointIndex > samples then
+            State.OrbitPointIndex = 1
+        end
+        if State.OrbitPointIndex < 1 then
+            State.OrbitPointIndex = samples
         end
     end
-    return bestPoint
+    
+    return points[State.OrbitPointIndex]
 end
 
 local function attackEnemy(enemy)
@@ -680,31 +715,30 @@ local function mainLoop()
                 State.LockedEnemyPos = enemyPos
                 
                 if dist > CONFIG.KeepDistance then
-                    -- ⭐ APPROACH - pakai pathfinding
+                    -- ⭐ APPROACH
+                    resetOrbitState()
                     requestPath(enemyPos, "approach")
                     followPath()
                     attackEnemy(enemy)
                     
                     setStatus(
-                        string.format("Approaching (%.1f) | %d enemy | wp %d/%d", 
-                            dist, count, State.PathIndex, 
-                            State.PathWaypoints and #State.PathWaypoints or 0),
+                        string.format("Approaching (%.1f) | %d enemy", dist, count),
                         Color3.fromRGB(100, 180, 255)
                     )
                 else
-                    -- ⭐ KITE - pakai LOGIC PATHFINDING YANG SAMA
-                    -- bedanya cuma target-nya safe point
-                    local safePoint = findSafePointAroundEnemy(enemyPos, myPos)
-                    if safePoint then
-                        requestPath(safePoint, "retreat")
+                    -- ⭐ ORBIT - muterin musuh
+                    local orbitPoint = findOrbitPoint(enemy, enemyPos, myPos)
+                    if orbitPoint then
+                        requestPath(orbitPoint, "orbit")
                         followPath()
                     end
                     attackEnemy(enemy)
                     
                     setStatus(
-                        string.format("Kiting (%.1f) | %d enemy | wp %d/%d", 
-                            dist, count, State.PathIndex, 
-                            State.PathWaypoints and #State.PathWaypoints or 0),
+                        string.format("Orbiting (%.1f) | %d enemy | pt %d/%d", 
+                            dist, count, 
+                            State.OrbitPointIndex or 0, 
+                            CONFIG.OrbitPoints),
                         Color3.fromRGB(255, 180, 100)
                     )
                 end
@@ -712,9 +746,17 @@ local function mainLoop()
         else
             State.LockedEnemyPos = nil
             resetPath()
+            State.OrbitEnemyRef = nil
+            State.OrbitPointIndex = nil
             setStatus("No enemy | scanning...", Color3.fromRGB(160, 160, 180))
         end
     end
+end
+
+-- helper reset orbit
+local function resetOrbitState()
+    State.OrbitEnemyRef = nil
+    State.OrbitPointIndex = nil
 end
 
 task.spawn(function()
@@ -722,8 +764,8 @@ task.spawn(function()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v61 - LOADED    ║")
-    print("║   Kite pakai pathfinding sama      ║")
+    print("║   AUTO FARM KAITUN v62 - ORBIT     ║")
+    print("║   Muterin musuh di lingkaran 45    ║")
     print("╚════════════════════════════════════╝")
     
     setStatus("Starting...", Color3.fromRGB(255, 220, 100))
