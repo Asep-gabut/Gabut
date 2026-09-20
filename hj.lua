@@ -1,15 +1,15 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v62                    ║
--- ║   Kite: sample di karakter + raycast wall ║
+-- ║   AUTO FARM KAITUN v61                    ║
+-- ║   Kite pakai logic Pathfinding yang sama  ║
 -- ╚══════════════════════════════════════════╝
 
 local CONFIG = {
     KeepDistance = 45,
     AttackCooldown = 0.5,
-    LoopDelay = 0.01,
+    LoopDelay = 0.03,
     
     UseWalkSpeed = true,
-    WalkSpeed = 20,
+    WalkSpeed = 23,
     
     -- Pathfinding
     WaypointReached = 3,
@@ -19,10 +19,6 @@ local CONFIG = {
     AgentCanJump = true,
     AgentJumpHeight = 15,
     AgentMaxSlope = 40,
-    
-    -- ⭐ Kite
-    KiteRayLength = 30,        -- mundur sampe 40 stud
-    KiteSamples = 30,          -- 16 arah sample
     
     AutoUpgrade = true,
     AutoReconnect = true,
@@ -548,6 +544,7 @@ local function resetPath()
     State.PathGoalType = nil
 end
 
+-- ⭐ REQUEST PATH - sama buat approach & kite
 local function requestPath(targetPos, goalType)
     if not State.Humanoid or not State.RootPart then return end
     if not targetPos then return end
@@ -598,6 +595,7 @@ local function requestPath(targetPos, goalType)
     end)
 end
 
+-- ⭐ FOLLOW PATH - sama buat approach & kite
 local function followPath()
     if not State.Humanoid or not State.RootPart then return end
     
@@ -620,45 +618,25 @@ local function followPath()
     end
 end
 
--- ⭐⭐ KITE POINT - sample di sekitar KARAKTER + raycast ⭐⭐
-local function findKitePoint(enemyPos, myPos)
-    -- arah menjauh dari enemy
-    local awayDir = myPos - enemyPos
-    awayDir = Vector3.new(awayDir.X, 0, awayDir.Z)
-    if awayDir.Magnitude < 0.1 then
-        awayDir = Vector3.new(1, 0, 0)
-    end
-    awayDir = awayDir.Unit
-    
+-- ⭐ SAFE POINT - simple, tanpa raycast
+local function findSafePointAroundEnemy(enemyPos, myPos)
     local bestPoint = nil
-    local bestScore = -math.huge
-    local samples = CONFIG.KiteSamples
-    local rayLength = CONFIG.KiteRayLength
-    
-    -- raycast params
-    local rayParams = RaycastParams.new()
-    rayParams.FilterType = Enum.RaycastFilterType.Exclude
-    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
-    
+    local bestDist = math.huge
+    local samples = 16
     for i = 0, samples - 1 do
         local angle = (i / samples) * math.pi * 2
-        local dir = Vector3.new(math.cos(angle), 0, math.sin(angle))
-        
-        -- ⭐ cek ada tembok gak di arah ini
-        local result = workspace:Raycast(myPos, dir * rayLength, rayParams)
-        
-        if not result then
-            -- ⭐ gak ada tembok — cek seberapa menjauh dari enemy
-            local dot = dir.X * awayDir.X + dir.Z * awayDir.Z
-            
-            -- cuma pilih yang menjauh (dot > 0)
-            if dot > 0 and dot > bestScore then
-                bestScore = dot
-                bestPoint = myPos + dir * rayLength
-            end
+        local offset = Vector3.new(math.cos(angle), 0, math.sin(angle))
+        local point = Vector3.new(
+            enemyPos.X + offset.X * CONFIG.KeepDistance,
+            myPos.Y,
+            enemyPos.Z + offset.Z * CONFIG.KeepDistance
+        )
+        local d = (point - myPos).Magnitude
+        if d < bestDist then
+            bestDist = d
+            bestPoint = point
         end
     end
-    
     return bestPoint
 end
 
@@ -702,7 +680,7 @@ local function mainLoop()
                 State.LockedEnemyPos = enemyPos
                 
                 if dist > CONFIG.KeepDistance then
-                    -- ⭐ APPROACH
+                    -- ⭐ APPROACH - pakai pathfinding
                     requestPath(enemyPos, "approach")
                     followPath()
                     attackEnemy(enemy)
@@ -714,10 +692,11 @@ local function mainLoop()
                         Color3.fromRGB(100, 180, 255)
                     )
                 else
-                    -- ⭐ KITE - sample di karakter + raycast
-                    local kitePoint = findKitePoint(enemyPos, myPos)
-                    if kitePoint then
-                        requestPath(kitePoint, "retreat")
+                    -- ⭐ KITE - pakai LOGIC PATHFINDING YANG SAMA
+                    -- bedanya cuma target-nya safe point
+                    local safePoint = findSafePointAroundEnemy(enemyPos, myPos)
+                    if safePoint then
+                        requestPath(safePoint, "retreat")
                         followPath()
                     end
                     attackEnemy(enemy)
@@ -743,8 +722,8 @@ task.spawn(function()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v62 - LOADED    ║")
-    print("║   Kite raycast di sekitar karakter ║")
+    print("║   AUTO FARM KAITUN v61 - LOADED    ║")
+    print("║   Kite pakai pathfinding sama      ║")
     print("╚════════════════════════════════════╝")
     
     setStatus("Starting...", Color3.fromRGB(255, 220, 100))
