@@ -12,15 +12,19 @@ local keyrelease = keyrelease or function() warn("[EnemySel] keyrelease tidak te
 local humanoids = workspace:WaitForChild("Humanoids")
 local regions = humanoids:WaitForChild("Regions")
 
+-- // State
 local selectedArea = nil
 local selectedEnemy = nil
+local selectedEnemyName = nil      -- nama model enemy (e.g. "Bandit")
+local selectedNpcFolderName = nil  -- nama folder npc (e.g. "Bandit")
 local activeTween = nil
-local attackCooldown = false
 local followThread = nil
+local attackThread = nil
 
 -- // Setting
 local FOLLOW_HEIGHT   = 5     -- stud di atas kepala enemy
-local FOLLOW_INTERVAL = 0.25  -- makin kecil makin responsif
+local FOLLOW_INTERVAL = 0.25  -- update follow
+local ATTACK_INTERVAL = 0.5   -- jeda antar attack
 
 local function getCharacter()
 	local char = player.Character
@@ -177,7 +181,7 @@ local attackBtn = Instance.new("TextButton")
 attackBtn.Size = UDim2.new(1, -20, 0, 46)
 attackBtn.Position = UDim2.new(0, 10, 0, 330)
 attackBtn.BackgroundColor3 = Color3.fromRGB(200, 55, 55)
-attackBtn.Text = "ATTACK (F)"
+attackBtn.Text = "STOP (F)"
 attackBtn.TextColor3 = Color3.fromRGB(255,255,255)
 attackBtn.Font = Enum.Font.GothamBold
 attackBtn.TextSize = 15
@@ -235,16 +239,52 @@ local function highlight(container, selectedBtn)
 	end
 end
 
--- Stop follow lama
-local function stopFollow()
+local function isEnemyAlive(enemy)
+	if not enemy or not enemy.Parent then return false end
+	local hum = enemy:FindFirstChildOfClass("Humanoid")
+	if not hum then return false end
+	return hum.Health > 0
+end
+
+-- Cari enemy baru di folder yang sama, dengan nama yang sama
+local function findEnemyByName()
+	if not selectedArea or not selectedNpcFolderName or not selectedEnemyName then
+		return nil
+	end
+	local activeNpcs = selectedArea:FindFirstChild("ActiveNpcs")
+	if not activeNpcs then return nil end
+	local npcFolder = activeNpcs:FindFirstChild(selectedNpcFolderName)
+	if not npcFolder then return nil end
+
+	for _, enemy in ipairs(npcFolder:GetChildren()) do
+		if enemy:IsA("Model")
+		and enemy.Name == selectedEnemyName
+		and isEnemyAlive(enemy) then
+			return enemy
+		end
+	end
+	return nil
+end
+
+local function stopAll()
 	if followThread then
 		pcall(function() task.cancel(followThread) end)
 		followThread = nil
 	end
+	if attackThread then
+		pcall(function() task.cancel(attackThread) end)
+		attackThread = nil
+	end
+	if activeTween then
+		pcall(function() activeTween:Cancel() end)
+		activeTween = nil
+	end
+	local char, hum, hrp = getCharacter()
+	if hrp then hrp.Anchored = false end
 end
 
 ------------------------------------------------------------
--- // Approach — TWEEN KE ATAS + AUTO FOLLOW
+-- // Approach + Auto Follow + Auto Find New Enemy
 ------------------------------------------------------------
 local function approachEnemy(enemy)
 	if not enemy or not enemy.Parent then return end
@@ -255,15 +295,9 @@ local function approachEnemy(enemy)
 		or enemy:FindFirstChildWhichIsA("BasePart")
 	if not targetPart then return end
 
-	stopFollow()
-	if activeTween then
-		pcall(function() activeTween:Cancel() end)
-		activeTween = nil
-	end
-
+	stopAll()
 	hum:MoveTo(hrp.Position)
 
-	-- Tween awal ke atas enemy
 	local enemyPos = targetPart.Position
 	local goal = Vector3.new(enemyPos.X, enemyPos.Y + FOLLOW_HEIGHT, enemyPos.Z)
 	local goalCFrame = CFrame.new(goal, Vector3.new(enemyPos.X, enemyPos.Y, enemyPos.Z))
@@ -279,46 +313,78 @@ local function approachEnemy(enemy)
 		{CFrame = goalCFrame}
 	)
 	activeTween = tween
-
 	tween.Completed:Connect(function()
 		if activeTween == tween then activeTween = nil end
 	end)
-
 	tween:Play()
 	status.Text = "Approaching: " .. enemy.Name
 
-	-- 🔥 AUTO FOLLOW: ngikutin enemy tiap FOLLOW_INTERVAL detik
+	-- // FOLLOW + FIND NEW LOOP
 	followThread = task.spawn(function()
-		while selectedEnemy == enemy and enemy.Parent do
-			task.wait(FOLLOW_INTERVAL)
+		while selectedEnemyName and selectedNpcFolderName and selectedArea do
+			-- Kalau enemy mati / hilang → cari baru dengan nama yang sama
+			if not isEnemyAlive(selectedEnemy) then
+				local newEnemy = findEnemyByName()
+				if newEnemy then
+					selectedEnemy = newEnemy
+					status.Text = "🔄 New target: " .. newEnemy.Name
+					task.wait(0.15)
+				else
+					selectedEnemy = nil
+					status.Text = "⏳ Nunggu " .. selectedEnemyName .. " spawn..."
+					task.wait(1)
+					continue
+				end
+			end
 
 			local c, h, root = getCharacter()
 			if not c or not root then break end
 
-			local tp = enemy:FindFirstChild("HumanoidRootPart")
-				or enemy:FindFirstChildWhichIsA("BasePart")
-			if not tp then break end
+			local tp = selectedEnemy:FindFirstChild("HumanoidRootPart")
+				or selectedEnemy:FindFirstChildWhichIsA("BasePart")
+			if not tp then
+				task.wait(0.2)
+				continue
+			end
 
 			local ePos = tp.Position
 			local targetPos = Vector3.new(ePos.X, ePos.Y + FOLLOW_HEIGHT, ePos.Z)
 			local targetCF = CFrame.new(targetPos, Vector3.new(ePos.X, ePos.Y, ePos.Z))
 
-			if (root.Position - targetPos).Magnitude < 0.3 then
-				continue
+			if (root.Position - targetPos).Magnitude > 0.3 then
+				root.Anchored = true
+				local moveTween = TweenService:Create(
+					root,
+					TweenInfo.new(FOLLOW_INTERVAL, Enum.EasingStyle.Linear),
+					{CFrame = targetCF}
+				)
+				moveTween:Play()
+				moveTween.Completed:Wait()
 			end
 
-			root.Anchored = true
-			local moveTween = TweenService:Create(
-				root,
-				TweenInfo.new(FOLLOW_INTERVAL, Enum.EasingStyle.Linear),
-				{CFrame = targetCF}
-			)
-			moveTween:Play()
-			moveTween.Completed:Wait()
+			task.wait(FOLLOW_INTERVAL)
 		end
 	end)
+
+	-- // AUTO ATTACK LOOP
+	attackThread = task.spawn(function()
+		while selectedEnemyName and selectedNpcFolderName and selectedArea do
+			task.wait(ATTACK_INTERVAL)
+			if isEnemyAlive(selectedEnemy) then
+				keypress(0x46)
+				task.wait(0.05)
+				keyrelease(0x46)
+			end
+		end
+	end)
+
+	-- Update tombol jadi STOP
+	attackBtn.Text = "STOP (F)"
 end
 
+------------------------------------------------------------
+-- // List refresh
+------------------------------------------------------------
 local refreshEnemies
 refreshEnemies = function()
 	clearScroll(enemyScroll)
@@ -339,6 +405,8 @@ refreshEnemies = function()
 				local btn
 				btn = makeListButton(enemyScroll, label, function()
 					selectedEnemy = enemy
+					selectedEnemyName = enemy.Name
+					selectedNpcFolderName = npcFolder.Name
 					highlight(enemyScroll, btn)
 					approachEnemy(enemy)
 				end)
@@ -361,7 +429,10 @@ local function refreshAreas()
 			btn = makeListButton(areaScroll, region.Name, function()
 				selectedArea = region
 				selectedEnemy = nil
-				stopFollow()
+				selectedEnemyName = nil
+				selectedNpcFolderName = nil
+				stopAll()
+				attackBtn.Text = "STOP (F)"
 				highlight(areaScroll, btn)
 				refreshEnemies()
 			end)
@@ -370,26 +441,20 @@ local function refreshAreas()
 end
 
 ------------------------------------------------------------
--- // ATTACK
+-- // STOP toggle (F / tombol)
 ------------------------------------------------------------
-local function doAttack()
-	if attackCooldown then return end
-	local char, hum, hrp = getCharacter()
-	if not char then return end
-	if not selectedEnemy or not selectedEnemy.Parent then
-		status.Text = "Belum ada enemy yang dipilih."
-		return
+local function toggleStop()
+	if selectedEnemyName then
+		-- STOP
+		selectedEnemyName = nil
+		selectedNpcFolderName = nil
+		selectedEnemy = nil
+		stopAll()
+		status.Text = "⏹ Stopped."
+		attackBtn.Text = "START (pilih enemy)"
+	else
+		status.Text = "Pilih enemy dulu di list."
 	end
-
-	keypress(0x46)
-	task.wait(0.05)
-	keyrelease(0x46)
-
-	status.Text = "⚔ Attacking: " .. selectedEnemy.Name
-
-	attackCooldown = true
-	task.wait(0.3)
-	attackCooldown = false
 end
 
 ------------------------------------------------------------
@@ -400,12 +465,12 @@ toggle.MouseButton1Click:Connect(function()
 	if main.Visible then refreshAreas() end
 end)
 
-attackBtn.MouseButton1Click:Connect(doAttack)
+attackBtn.MouseButton1Click:Connect(toggleStop)
 
 UserInputService.InputBegan:Connect(function(input, processed)
 	if processed then return end
 	if input.KeyCode == Enum.KeyCode.F then
-		doAttack()
+		toggleStop()
 	end
 end)
 
