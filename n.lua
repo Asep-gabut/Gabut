@@ -2,31 +2,27 @@
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
-
--- // Guard executor functions
-local mouse1click  = mouse1click  or function() warn("[EnemySel] mouse1click tidak tersedia") end
-local mouse1press  = mouse1press  or function() end
-local mouse1release= mouse1release or function() end
 
 local humanoids = workspace:WaitForChild("Humanoids")
 local regions = humanoids:WaitForChild("Regions")
 
 -- // State
 local selectedArea = nil
-local targetEnemyName = nil     -- nama enemy yang mau dibunuh semua
-local targetNpcFolder = nil     -- filter folder (opsional, biar fokus 1 folder)
-local currentEnemy = nil        -- enemy yang lagi diserang
+local targetEnemyName = nil
+local currentEnemy = nil
 local followThread = nil
 local killThread = nil
 local activeTween = nil
 
 -- // Setting
 local FOLLOW_HEIGHT   = 5
-local FOLLOW_INTERVAL = 0.2
+local FOLLOW_INTERVAL = 0.12    -- makin kecil makin nempel
 local ATTACK_INTERVAL = 0.35
+local FOLLOW_MIN_DIST = 0.15    -- toleransi geter
 
 local function getCharacter()
 	local char = player.Character
@@ -35,6 +31,38 @@ local function getCharacter()
 	local hrp = char:FindFirstChild("HumanoidRootPart")
 	if hum and hrp then return char, hum, hrp end
 	return nil
+end
+
+------------------------------------------------------------
+-- // COMBAT GUI
+------------------------------------------------------------
+local combatGui = playerGui:WaitForChild("ComponentsHolder")
+	:WaitForChild("Mobile")
+	:WaitForChild("Hud")
+	:WaitForChild("Combat")
+
+local function getCombatButton()
+	if combatGui:IsA("GuiButton") then return combatGui end
+	return combatGui:FindFirstChildWhichIsA("GuiButton", true)
+end
+
+local function clickCombat()
+	local btn = getCombatButton()
+	if not btn then return end
+
+	-- Prioritas: firesignal (executor)
+	if type(firesignal) == "function" then
+		local ok = pcall(function()
+			firesignal(btn.MouseButton1Click)
+		end)
+		if ok then return end
+	end
+
+	-- Fallback: klik virtual di posisi tombol
+	local pos = btn.AbsolutePosition + btn.AbsoluteSize / 2
+	VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 1)
+	task.wait(0.02)
+	VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 1)
 end
 
 ------------------------------------------------------------
@@ -248,7 +276,12 @@ local function isEnemyAlive(enemy)
 	return hum.Health > 0
 end
 
--- Cari SEMUA enemy hidup dengan nama yang sama (across semua folder NPC)
+local function getEnemyPart(enemy)
+	if not enemy or not enemy.Parent then return nil end
+	return enemy:FindFirstChild("HumanoidRootPart")
+		or enemy:FindFirstChildWhichIsA("BasePart")
+end
+
 local function findAllEnemiesWithName()
 	local result = {}
 	if not selectedArea or not targetEnemyName then return result end
@@ -261,7 +294,7 @@ local function findAllEnemiesWithName()
 				if enemy:IsA("Model")
 				and enemy.Name == targetEnemyName
 				and isEnemyAlive(enemy) then
-					table.insert(result, {enemy = enemy, folder = npcFolder.Name})
+					table.insert(result, enemy)
 				end
 			end
 		end
@@ -269,6 +302,154 @@ local function findAllEnemiesWithName()
 	return result
 end
 
+------------------------------------------------------------
+-- // FOLLOW LOOP (jalan terus tiap 0.12s, ngikutin currentEnemy)
+------------------------------------------------------------
+local function startFollow()
+	if followThread then
+		pcall(function() task.cancel(followThread) end)
+	end
+
+	followThread = task.spawn(function()
+		while targetEnemyName and selectedArea do
+			local char, hum, hrp = getCharacter()
+			if not char then
+				task.wait(0.3)
+				continue
+			end
+
+			-- Kalau currentEnemy mati/hilang, tunggu killThread ganti
+			if currentEnemy and currentEnemy.Parent and isEnemyAlive(currentEnemy) then
+				local tp = getEnemyPart(currentEnemy)
+				if tp then
+					local ePos = tp.Position
+					local targetPos = Vector3.new(ePos.X, ePos.Y + FOLLOW_HEIGHT, ePos.Z)
+					local targetCF = CFrame.new(targetPos,
+						Vector3.new(ePos.X, ePos.Y, ePos.Z))
+
+					-- Cek jarak, kalau jauh tween
+					local dist = (hrp.Position - targetPos).Magnitude
+					if dist > FOLLOW_MIN_DIST then
+						hrp.Anchored = true
+						-- Cancel tween lama biar gak numpuk
+						if activeTween then
+							pcall(function() activeTween:Cancel() end)
+						end
+						local mt = TweenService:Create(
+							hrp,
+							TweenInfo.new(FOLLOW_INTERVAL, Enum.EasingStyle.Linear),
+							{CFrame = targetCF}
+						)
+						activeTween = mt
+						mt:Play()
+						-- Jangan Wait di sini biar loop tetap cepat
+					end
+				end
+			end
+
+			task.wait(FOLLOW_INTERVAL)
+		end
+	end)
+end
+
+------------------------------------------------------------
+-- // Approach 1 enemy (tween awal)
+------------------------------------------------------------
+local function approachEnemy(enemy)
+	local char, hum, hrp = getCharacter()
+	local tp = getEnemyPart(enemy)
+	if not char or not tp then return false end
+
+	if activeTween then
+		pcall(function() activeTween:Cancel() end)
+		activeTween = nil
+	end
+
+	hum:MoveTo(hrp.Position)
+
+	local ePos = tp.Position
+	local goal = Vector3.new(ePos.X, ePos.Y + FOLLOW_HEIGHT, ePos.Z)
+	local goalCF = CFrame.new(goal, Vector3.new(ePos.X, ePos.Y, ePos.Z))
+
+	local dist = (hrp.Position - goal).Magnitude
+	local duration = math.max(dist / 70, 0.1)
+
+	hrp.Anchored = true
+	local tw = TweenService:Create(
+		hrp,
+		TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{CFrame = goalCF}
+	)
+	activeTween = tw
+	tw:Play()
+	tw.Completed:Wait()
+	if activeTween == tw then activeTween = nil end
+	return true
+end
+
+------------------------------------------------------------
+-- // KILL LOOP (cari target → attack sampai mati → cari lagi)
+------------------------------------------------------------
+local function startHunting()
+	if killThread then
+		pcall(function() task.cancel(killThread) end)
+	end
+
+	killThread = task.spawn(function()
+		while targetEnemyName and selectedArea do
+			-- 1. Cari semua target hidup
+			local list = findAllEnemiesWithName()
+
+			if #list == 0 then
+				currentEnemy = nil
+				status.Text = "⏳ Nunggu " .. targetEnemyName .. " spawn..."
+				task.wait(1)
+				continue
+			end
+
+			status.Text = "🎯 " .. #list .. " " .. targetEnemyName .. " hidup"
+
+			-- 2. Pilih yang paling dekat
+			local char, hum, hrp = getCharacter()
+			if not hrp then task.wait(0.5); continue end
+
+			local closest, closestDist = nil, math.huge
+			for _, enemy in ipairs(list) do
+				local tp = getEnemyPart(enemy)
+				if tp then
+					local d = (hrp.Position - tp.Position).Magnitude
+					if d < closestDist then
+						closestDist = d
+						closest = enemy
+					end
+				end
+			end
+
+			if not closest then task.wait(0.3); continue end
+			currentEnemy = closest
+
+			-- 3. Approach awal
+			if closestDist > 8 then
+				approachEnemy(closest)
+			end
+
+			-- 4. Attack sampai mati (follow-nya udah dihandle startFollow)
+			while isEnemyAlive(closest) and targetEnemyName and selectedArea do
+				clickCombat()
+				task.wait(ATTACK_INTERVAL)
+			end
+
+			if closest and closest.Parent then
+				status.Text = "✅ " .. closest.Name .. " mati, lanjut..."
+			end
+			task.wait(0.2)
+		end
+	end)
+end
+
+------------------------------------------------------------
+-- // Stop
+------------------------------------------------------------
 local function stopAll()
 	if followThread then
 		pcall(function() task.cancel(followThread) end)
@@ -288,130 +469,6 @@ local function stopAll()
 end
 
 ------------------------------------------------------------
--- // Approach 1 enemy (tween ke atas)
-------------------------------------------------------------
-local function approachEnemy(enemy)
-	local char, hum, hrp = getCharacter()
-	if not char or not enemy or not enemy.Parent then return false end
-
-	local tp = enemy:FindFirstChild("HumanoidRootPart")
-		or enemy:FindFirstChildWhichIsA("BasePart")
-	if not tp then return false end
-
-	if activeTween then
-		pcall(function() activeTween:Cancel() end)
-		activeTween = nil
-	end
-
-	hum:MoveTo(hrp.Position)
-
-	local ePos = tp.Position
-	local goal = Vector3.new(ePos.X, ePos.Y + FOLLOW_HEIGHT, ePos.Z)
-	local goalCF = CFrame.new(goal, Vector3.new(ePos.X, ePos.Y, ePos.Z))
-
-	local dist = (hrp.Position - goal).Magnitude
-	local duration = math.max(dist / 60, 0.1)
-
-	hrp.Anchored = true
-	local tw = TweenService:Create(
-		hrp,
-		TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-		{CFrame = goalCF}
-	)
-	activeTween = tw
-	tw:Play()
-	tw.Completed:Wait()
-	if activeTween == tw then activeTween = nil end
-	return true
-end
-
-------------------------------------------------------------
--- // MAIN LOOP: cari → tween → serang → mati → cari lagi
-------------------------------------------------------------
-local function startHunting()
-	stopAll()
-	attackBtn.Text = "STOP (F)"
-	attackBtn.BackgroundColor3 = Color3.fromRGB(200, 55, 55)
-
-	killThread = task.spawn(function()
-		while targetEnemyName and selectedArea do
-			-- 1. Cari semua enemy hidup dengan nama itu
-			local list = findAllEnemiesWithName()
-
-			if #list == 0 then
-				currentEnemy = nil
-				status.Text = "⏳ Nunggu " .. targetEnemyName .. " spawn..."
-				task.wait(1)
-				continue
-			end
-
-			status.Text = "🎯 " .. #list .. " " .. targetEnemyName .. " hidup"
-
-			-- 2. Pilih yang paling dekat
-			local char, hum, hrp = getCharacter()
-			if not hrp then task.wait(0.5); continue end
-
-			local closest, closestDist = nil, math.huge
-			for _, entry in ipairs(list) do
-				local tp = entry.enemy:FindFirstChild("HumanoidRootPart")
-					or entry.enemy:FindFirstChildWhichIsA("BasePart")
-				if tp then
-					local d = (hrp.Position - tp.Position).Magnitude
-					if d < closestDist then
-						closestDist = d
-						closest = entry.enemy
-					end
-				end
-			end
-
-			if not closest then task.wait(0.3); continue end
-			currentEnemy = closest
-
-			-- 3. Tween ke atas enemy (kalau masih jauh)
-			if closestDist > 8 then
-				approachEnemy(closest)
-			end
-
-			-- 4. Serang sampai mati
-			while isEnemyAlive(closest) and targetEnemyName and selectedArea do
-				local c, h, root = getCharacter()
-				if not c or not root then break end
-
-				local tp = closest:FindFirstChild("HumanoidRootPart")
-					or closest:FindFirstChildWhichIsA("BasePart")
-				if not tp then break end
-
-				-- Follow posisi (stay di atas)
-				local ePos = tp.Position
-				local targetPos = Vector3.new(ePos.X, ePos.Y + FOLLOW_HEIGHT, ePos.Z)
-				local targetCF = CFrame.new(targetPos, Vector3.new(ePos.X, ePos.Y, ePos.Z))
-				if (root.Position - targetPos).Magnitude > 0.3 then
-					root.Anchored = true
-					local mt = TweenService:Create(
-						root,
-						TweenInfo.new(FOLLOW_INTERVAL, Enum.EasingStyle.Linear),
-						{CFrame = targetCF}
-					)
-					mt:Play()
-					mt.Completed:Wait()
-				end
-
-				-- 🔥 ATTACK pakai mouse1click
-				mouse1click()
-
-				task.wait(ATTACK_INTERVAL)
-			end
-
-			-- Selesai 1 enemy → loop balik cari target berikutnya
-			if closest and closest.Parent then
-				status.Text = "✅ " .. closest.Name .. " mati, lanjut..."
-			end
-			task.wait(0.2)
-		end
-	end)
-end
-
-------------------------------------------------------------
 -- // List refresh
 ------------------------------------------------------------
 local refreshEnemies
@@ -425,7 +482,6 @@ refreshEnemies = function()
 		return
 	end
 
-	-- Kumpulin nama unik (count per nama)
 	local nameCount = {}
 	for _, npcFolder in ipairs(activeNpcs:GetChildren()) do
 		if npcFolder:IsA("Folder") or npcFolder:IsA("Model") then
@@ -455,7 +511,10 @@ refreshEnemies = function()
 			targetEnemyName = name
 			highlight(enemyScroll, btn)
 			status.Text = "🎯 Target: " .. name
+			startFollow()
 			startHunting()
+			attackBtn.Text = "STOP (F)"
+			attackBtn.BackgroundColor3 = Color3.fromRGB(200, 55, 55)
 		end)
 	end
 
@@ -470,7 +529,6 @@ local function refreshAreas()
 			btn = makeListButton(areaScroll, region.Name, function()
 				selectedArea = region
 				targetEnemyName = nil
-				currentEnemy = nil
 				stopAll()
 				attackBtn.Text = "HUNTING..."
 				attackBtn.BackgroundColor3 = Color3.fromRGB(60, 150, 80)
@@ -482,12 +540,11 @@ local function refreshAreas()
 end
 
 ------------------------------------------------------------
--- // Stop / Toggle
+-- // Toggle stop
 ------------------------------------------------------------
 local function toggleStop()
 	if targetEnemyName then
 		targetEnemyName = nil
-		currentEnemy = nil
 		stopAll()
 		status.Text = "⏹ Stopped."
 		attackBtn.Text = "HUNTING..."
