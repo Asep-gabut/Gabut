@@ -6,25 +6,27 @@ local UserInputService = game:GetService("UserInputService")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
-local keypress   = keypress   or function() warn("[EnemySel] keypress tidak tersedia") end
-local keyrelease = keyrelease or function() warn("[EnemySel] keyrelease tidak tersedia") end
+-- // Guard executor functions
+local mouse1click  = mouse1click  or function() warn("[EnemySel] mouse1click tidak tersedia") end
+local mouse1press  = mouse1press  or function() end
+local mouse1release= mouse1release or function() end
 
 local humanoids = workspace:WaitForChild("Humanoids")
 local regions = humanoids:WaitForChild("Regions")
 
 -- // State
 local selectedArea = nil
-local selectedEnemy = nil
-local selectedEnemyName = nil      -- nama model enemy (e.g. "Bandit")
-local selectedNpcFolderName = nil  -- nama folder npc (e.g. "Bandit")
-local activeTween = nil
+local targetEnemyName = nil     -- nama enemy yang mau dibunuh semua
+local targetNpcFolder = nil     -- filter folder (opsional, biar fokus 1 folder)
+local currentEnemy = nil        -- enemy yang lagi diserang
 local followThread = nil
-local attackThread = nil
+local killThread = nil
+local activeTween = nil
 
 -- // Setting
-local FOLLOW_HEIGHT   = 5     -- stud di atas kepala enemy
-local FOLLOW_INTERVAL = 0.25  -- update follow
-local ATTACK_INTERVAL = 0.5   -- jeda antar attack
+local FOLLOW_HEIGHT   = 5
+local FOLLOW_INTERVAL = 0.2
+local ATTACK_INTERVAL = 0.35
 
 local function getCharacter()
 	local char = player.Character
@@ -152,7 +154,7 @@ local enemyLabel = Instance.new("TextLabel")
 enemyLabel.Size = UDim2.new(1, -20, 0, 22)
 enemyLabel.Position = UDim2.new(0, 10, 0, 188)
 enemyLabel.BackgroundTransparency = 1
-enemyLabel.Text = "👹 Enemy:"
+enemyLabel.Text = "👹 Nama Enemy:"
 enemyLabel.TextColor3 = Color3.fromRGB(200,200,200)
 enemyLabel.Font = Enum.Font.GothamBold
 enemyLabel.TextSize = 13
@@ -180,8 +182,8 @@ enemyPad.PaddingRight = UDim.new(0,4)
 local attackBtn = Instance.new("TextButton")
 attackBtn.Size = UDim2.new(1, -20, 0, 46)
 attackBtn.Position = UDim2.new(0, 10, 0, 330)
-attackBtn.BackgroundColor3 = Color3.fromRGB(200, 55, 55)
-attackBtn.Text = "STOP (F)"
+attackBtn.BackgroundColor3 = Color3.fromRGB(60, 150, 80)
+attackBtn.Text = "HUNTING..."
 attackBtn.TextColor3 = Color3.fromRGB(255,255,255)
 attackBtn.Font = Enum.Font.GothamBold
 attackBtn.TextSize = 15
@@ -193,7 +195,7 @@ local status = Instance.new("TextLabel")
 status.Size = UDim2.new(1, -20, 0, 60)
 status.Position = UDim2.new(0, 10, 0, 382)
 status.BackgroundTransparency = 1
-status.Text = "Pilih area & enemy dulu..."
+status.Text = "Pilih area & nama enemy..."
 status.TextColor3 = Color3.fromRGB(180,180,180)
 status.Font = Enum.Font.Gotham
 status.TextSize = 12
@@ -202,7 +204,7 @@ status.TextYAlignment = Enum.TextYAlignment.Top
 status.Parent = main
 
 ------------------------------------------------------------
--- // Logic
+-- // Helpers
 ------------------------------------------------------------
 local function clearScroll(scroll)
 	for _, c in ipairs(scroll:GetChildren()) do
@@ -246,24 +248,25 @@ local function isEnemyAlive(enemy)
 	return hum.Health > 0
 end
 
--- Cari enemy baru di folder yang sama, dengan nama yang sama
-local function findEnemyByName()
-	if not selectedArea or not selectedNpcFolderName or not selectedEnemyName then
-		return nil
-	end
+-- Cari SEMUA enemy hidup dengan nama yang sama (across semua folder NPC)
+local function findAllEnemiesWithName()
+	local result = {}
+	if not selectedArea or not targetEnemyName then return result end
 	local activeNpcs = selectedArea:FindFirstChild("ActiveNpcs")
-	if not activeNpcs then return nil end
-	local npcFolder = activeNpcs:FindFirstChild(selectedNpcFolderName)
-	if not npcFolder then return nil end
+	if not activeNpcs then return result end
 
-	for _, enemy in ipairs(npcFolder:GetChildren()) do
-		if enemy:IsA("Model")
-		and enemy.Name == selectedEnemyName
-		and isEnemyAlive(enemy) then
-			return enemy
+	for _, npcFolder in ipairs(activeNpcs:GetChildren()) do
+		if npcFolder:IsA("Folder") or npcFolder:IsA("Model") then
+			for _, enemy in ipairs(npcFolder:GetChildren()) do
+				if enemy:IsA("Model")
+				and enemy.Name == targetEnemyName
+				and isEnemyAlive(enemy) then
+					table.insert(result, {enemy = enemy, folder = npcFolder.Name})
+				end
+			end
 		end
 	end
-	return nil
+	return result
 end
 
 local function stopAll()
@@ -271,9 +274,9 @@ local function stopAll()
 		pcall(function() task.cancel(followThread) end)
 		followThread = nil
 	end
-	if attackThread then
-		pcall(function() task.cancel(attackThread) end)
-		attackThread = nil
+	if killThread then
+		pcall(function() task.cancel(killThread) end)
+		killThread = nil
 	end
 	if activeTween then
 		pcall(function() activeTween:Cancel() end)
@@ -281,105 +284,131 @@ local function stopAll()
 	end
 	local char, hum, hrp = getCharacter()
 	if hrp then hrp.Anchored = false end
+	currentEnemy = nil
 end
 
 ------------------------------------------------------------
--- // Approach + Auto Follow + Auto Find New Enemy
+-- // Approach 1 enemy (tween ke atas)
 ------------------------------------------------------------
 local function approachEnemy(enemy)
-	if not enemy or not enemy.Parent then return end
 	local char, hum, hrp = getCharacter()
-	if not char then return end
+	if not char or not enemy or not enemy.Parent then return false end
 
-	local targetPart = enemy:FindFirstChild("HumanoidRootPart")
+	local tp = enemy:FindFirstChild("HumanoidRootPart")
 		or enemy:FindFirstChildWhichIsA("BasePart")
-	if not targetPart then return end
+	if not tp then return false end
 
-	stopAll()
+	if activeTween then
+		pcall(function() activeTween:Cancel() end)
+		activeTween = nil
+	end
+
 	hum:MoveTo(hrp.Position)
 
-	local enemyPos = targetPart.Position
-	local goal = Vector3.new(enemyPos.X, enemyPos.Y + FOLLOW_HEIGHT, enemyPos.Z)
-	local goalCFrame = CFrame.new(goal, Vector3.new(enemyPos.X, enemyPos.Y, enemyPos.Z))
+	local ePos = tp.Position
+	local goal = Vector3.new(ePos.X, ePos.Y + FOLLOW_HEIGHT, ePos.Z)
+	local goalCF = CFrame.new(goal, Vector3.new(ePos.X, ePos.Y, ePos.Z))
 
-	local myPos = hrp.Position
-	local dist = (myPos - goal).Magnitude
+	local dist = (hrp.Position - goal).Magnitude
 	local duration = math.max(dist / 60, 0.1)
 
 	hrp.Anchored = true
-	local tween = TweenService:Create(
+	local tw = TweenService:Create(
 		hrp,
 		TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-		{CFrame = goalCFrame}
+		{CFrame = goalCF}
 	)
-	activeTween = tween
-	tween.Completed:Connect(function()
-		if activeTween == tween then activeTween = nil end
-	end)
-	tween:Play()
-	status.Text = "Approaching: " .. enemy.Name
+	activeTween = tw
+	tw:Play()
+	tw.Completed:Wait()
+	if activeTween == tw then activeTween = nil end
+	return true
+end
 
-	-- // FOLLOW + FIND NEW LOOP
-	followThread = task.spawn(function()
-		while selectedEnemyName and selectedNpcFolderName and selectedArea do
-			-- Kalau enemy mati / hilang → cari baru dengan nama yang sama
-			if not isEnemyAlive(selectedEnemy) then
-				local newEnemy = findEnemyByName()
-				if newEnemy then
-					selectedEnemy = newEnemy
-					status.Text = "🔄 New target: " .. newEnemy.Name
-					task.wait(0.15)
-				else
-					selectedEnemy = nil
-					status.Text = "⏳ Nunggu " .. selectedEnemyName .. " spawn..."
-					task.wait(1)
-					continue
-				end
-			end
+------------------------------------------------------------
+-- // MAIN LOOP: cari → tween → serang → mati → cari lagi
+------------------------------------------------------------
+local function startHunting()
+	stopAll()
+	attackBtn.Text = "STOP (F)"
+	attackBtn.BackgroundColor3 = Color3.fromRGB(200, 55, 55)
 
-			local c, h, root = getCharacter()
-			if not c or not root then break end
+	killThread = task.spawn(function()
+		while targetEnemyName and selectedArea do
+			-- 1. Cari semua enemy hidup dengan nama itu
+			local list = findAllEnemiesWithName()
 
-			local tp = selectedEnemy:FindFirstChild("HumanoidRootPart")
-				or selectedEnemy:FindFirstChildWhichIsA("BasePart")
-			if not tp then
-				task.wait(0.2)
+			if #list == 0 then
+				currentEnemy = nil
+				status.Text = "⏳ Nunggu " .. targetEnemyName .. " spawn..."
+				task.wait(1)
 				continue
 			end
 
-			local ePos = tp.Position
-			local targetPos = Vector3.new(ePos.X, ePos.Y + FOLLOW_HEIGHT, ePos.Z)
-			local targetCF = CFrame.new(targetPos, Vector3.new(ePos.X, ePos.Y, ePos.Z))
+			status.Text = "🎯 " .. #list .. " " .. targetEnemyName .. " hidup"
 
-			if (root.Position - targetPos).Magnitude > 0.3 then
-				root.Anchored = true
-				local moveTween = TweenService:Create(
-					root,
-					TweenInfo.new(FOLLOW_INTERVAL, Enum.EasingStyle.Linear),
-					{CFrame = targetCF}
-				)
-				moveTween:Play()
-				moveTween.Completed:Wait()
+			-- 2. Pilih yang paling dekat
+			local char, hum, hrp = getCharacter()
+			if not hrp then task.wait(0.5); continue end
+
+			local closest, closestDist = nil, math.huge
+			for _, entry in ipairs(list) do
+				local tp = entry.enemy:FindFirstChild("HumanoidRootPart")
+					or entry.enemy:FindFirstChildWhichIsA("BasePart")
+				if tp then
+					local d = (hrp.Position - tp.Position).Magnitude
+					if d < closestDist then
+						closestDist = d
+						closest = entry.enemy
+					end
+				end
 			end
 
-			task.wait(FOLLOW_INTERVAL)
-		end
-	end)
+			if not closest then task.wait(0.3); continue end
+			currentEnemy = closest
 
-	-- // AUTO ATTACK LOOP
-	attackThread = task.spawn(function()
-		while selectedEnemyName and selectedNpcFolderName and selectedArea do
-			task.wait(ATTACK_INTERVAL)
-			if isEnemyAlive(selectedEnemy) then
-				keypress(0x46)
-				task.wait(0.05)
-				keyrelease(0x46)
+			-- 3. Tween ke atas enemy (kalau masih jauh)
+			if closestDist > 8 then
+				approachEnemy(closest)
 			end
+
+			-- 4. Serang sampai mati
+			while isEnemyAlive(closest) and targetEnemyName and selectedArea do
+				local c, h, root = getCharacter()
+				if not c or not root then break end
+
+				local tp = closest:FindFirstChild("HumanoidRootPart")
+					or closest:FindFirstChildWhichIsA("BasePart")
+				if not tp then break end
+
+				-- Follow posisi (stay di atas)
+				local ePos = tp.Position
+				local targetPos = Vector3.new(ePos.X, ePos.Y + FOLLOW_HEIGHT, ePos.Z)
+				local targetCF = CFrame.new(targetPos, Vector3.new(ePos.X, ePos.Y, ePos.Z))
+				if (root.Position - targetPos).Magnitude > 0.3 then
+					root.Anchored = true
+					local mt = TweenService:Create(
+						root,
+						TweenInfo.new(FOLLOW_INTERVAL, Enum.EasingStyle.Linear),
+						{CFrame = targetCF}
+					)
+					mt:Play()
+					mt.Completed:Wait()
+				end
+
+				-- 🔥 ATTACK pakai mouse1click
+				mouse1click()
+
+				task.wait(ATTACK_INTERVAL)
+			end
+
+			-- Selesai 1 enemy → loop balik cari target berikutnya
+			if closest and closest.Parent then
+				status.Text = "✅ " .. closest.Name .. " mati, lanjut..."
+			end
+			task.wait(0.2)
 		end
 	end)
-
-	-- Update tombol jadi STOP
-	attackBtn.Text = "STOP (F)"
 end
 
 ------------------------------------------------------------
@@ -396,29 +425,41 @@ refreshEnemies = function()
 		return
 	end
 
-	local count = 0
+	-- Kumpulin nama unik (count per nama)
+	local nameCount = {}
 	for _, npcFolder in ipairs(activeNpcs:GetChildren()) do
-		for _, enemy in ipairs(npcFolder:GetChildren()) do
-			if enemy:IsA("Model") and enemy:FindFirstChildOfClass("Humanoid") then
-				count += 1
-				local label = npcFolder.Name .. " • " .. enemy.Name
-				local btn
-				btn = makeListButton(enemyScroll, label, function()
-					selectedEnemy = enemy
-					selectedEnemyName = enemy.Name
-					selectedNpcFolderName = npcFolder.Name
-					highlight(enemyScroll, btn)
-					approachEnemy(enemy)
-				end)
+		if npcFolder:IsA("Folder") or npcFolder:IsA("Model") then
+			for _, enemy in ipairs(npcFolder:GetChildren()) do
+				if enemy:IsA("Model") and enemy:FindFirstChildOfClass("Humanoid") then
+					nameCount[enemy.Name] = (nameCount[enemy.Name] or 0) + 1
+				end
 			end
 		end
 	end
 
-	if count == 0 then
-		status.Text = "Tidak ada enemy aktif di area ini."
-	else
-		status.Text = count .. " enemy ditemukan."
+	local sortedNames = {}
+	for name, _ in pairs(nameCount) do
+		table.insert(sortedNames, name)
 	end
+	table.sort(sortedNames)
+
+	if #sortedNames == 0 then
+		status.Text = "Tidak ada enemy aktif di area ini."
+		return
+	end
+
+	for _, name in ipairs(sortedNames) do
+		local label = name .. "  (" .. nameCount[name] .. ")"
+		local btn
+		btn = makeListButton(enemyScroll, label, function()
+			targetEnemyName = name
+			highlight(enemyScroll, btn)
+			status.Text = "🎯 Target: " .. name
+			startHunting()
+		end)
+	end
+
+	status.Text = #sortedNames .. " jenis enemy ditemukan."
 end
 
 local function refreshAreas()
@@ -428,11 +469,11 @@ local function refreshAreas()
 			local btn
 			btn = makeListButton(areaScroll, region.Name, function()
 				selectedArea = region
-				selectedEnemy = nil
-				selectedEnemyName = nil
-				selectedNpcFolderName = nil
+				targetEnemyName = nil
+				currentEnemy = nil
 				stopAll()
-				attackBtn.Text = "STOP (F)"
+				attackBtn.Text = "HUNTING..."
+				attackBtn.BackgroundColor3 = Color3.fromRGB(60, 150, 80)
 				highlight(areaScroll, btn)
 				refreshEnemies()
 			end)
@@ -441,19 +482,18 @@ local function refreshAreas()
 end
 
 ------------------------------------------------------------
--- // STOP toggle (F / tombol)
+-- // Stop / Toggle
 ------------------------------------------------------------
 local function toggleStop()
-	if selectedEnemyName then
-		-- STOP
-		selectedEnemyName = nil
-		selectedNpcFolderName = nil
-		selectedEnemy = nil
+	if targetEnemyName then
+		targetEnemyName = nil
+		currentEnemy = nil
 		stopAll()
 		status.Text = "⏹ Stopped."
-		attackBtn.Text = "START (pilih enemy)"
+		attackBtn.Text = "HUNTING..."
+		attackBtn.BackgroundColor3 = Color3.fromRGB(60, 150, 80)
 	else
-		status.Text = "Pilih enemy dulu di list."
+		status.Text = "Pilih nama enemy dulu di list."
 	end
 end
 
@@ -477,7 +517,7 @@ end)
 task.spawn(function()
 	while true do
 		task.wait(5)
-		if main.Visible and selectedArea then
+		if main.Visible and selectedArea and not targetEnemyName then
 			refreshEnemies()
 		end
 	end
