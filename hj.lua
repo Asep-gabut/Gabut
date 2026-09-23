@@ -1,15 +1,14 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v61                    ║
--- ║   Kite pakai logic Pathfinding yang sama  ║
+-- ║   AUTO FARM KAITUN v63                    ║
+-- ║   Tanpa walkspeed modifier                ║
+-- ║   Kite distance 100 stud                  ║
 -- ╚══════════════════════════════════════════╝
 
 local CONFIG = {
-    KeepDistance = 45,
+    KeepDistance = 45,       -- jarak approach ke enemy
+    KiteDistance = 100,      -- jarak kite (jauhi enemy sampe 100 stud)
     AttackCooldown = 0.5,
     LoopDelay = 0.03,
-    
-    UseWalkSpeed = true,
-    WalkSpeed = 23,
     
     -- Pathfinding
     WaypointReached = 3,
@@ -427,13 +426,6 @@ local function setShiftlock(enabled)
     end)
 end
 
-local function applyWalkSpeed()
-    if not CONFIG.UseWalkSpeed then return end
-    if State.Humanoid then
-        pcall(function() State.Humanoid.WalkSpeed = CONFIG.WalkSpeed end)
-    end
-end
-
 RunService.RenderStepped:Connect(function()
     if not State.Running then return end
     if not State.LockedEnemyPos then return end
@@ -448,7 +440,6 @@ local function setupCharacter(char)
     State.Humanoid = char:WaitForChild("Humanoid")
     State.RootPart = char:WaitForChild("HumanoidRootPart")
     task.wait(1)
-    applyWalkSpeed()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
 end
 
@@ -618,18 +609,19 @@ local function followPath()
     end
 end
 
--- ⭐ SAFE POINT - simple, tanpa raycast
+-- ⭐ SAFE POINT - cari titik berjarak KiteDistance (100 stud) dari enemy,
+--                pilih yang paling dekat dengan posisi kita sekarang
 local function findSafePointAroundEnemy(enemyPos, myPos)
     local bestPoint = nil
     local bestDist = math.huge
-    local samples = 16
+    local samples = 24
     for i = 0, samples - 1 do
         local angle = (i / samples) * math.pi * 2
         local offset = Vector3.new(math.cos(angle), 0, math.sin(angle))
         local point = Vector3.new(
-            enemyPos.X + offset.X * CONFIG.KeepDistance,
+            enemyPos.X + offset.X * CONFIG.KiteDistance,
             myPos.Y,
-            enemyPos.Z + offset.Z * CONFIG.KeepDistance
+            enemyPos.Z + offset.Z * CONFIG.KiteDistance
         )
         local d = (point - myPos).Magnitude
         if d < bestDist then
@@ -658,10 +650,6 @@ local function mainLoop()
         if not State.Character or not State.Character.Parent then task.wait(0.5) continue end
         if State.Humanoid.Health <= 0 then task.wait(1) continue end
         
-        if CONFIG.UseWalkSpeed and State.Humanoid.WalkSpeed ~= CONFIG.WalkSpeed then
-            applyWalkSpeed()
-        end
-        
         if CONFIG.AutoUpgrade and (tick() - State.LastUpgrade) >= CONFIG.UpgradeInterval then 
             upgradeSpell() 
         end
@@ -679,11 +667,13 @@ local function mainLoop()
                 
                 State.LockedEnemyPos = enemyPos
                 
+                -- ⭐ Selalu attack selama ada enemy
+                attackEnemy(enemy)
+                
                 if dist > CONFIG.KeepDistance then
-                    -- ⭐ APPROACH - pakai pathfinding
+                    -- APPROACH: jarak > 45, dekati pakai pathfinding
                     requestPath(enemyPos, "approach")
                     followPath()
-                    attackEnemy(enemy)
                     
                     setStatus(
                         string.format("Approaching (%.1f) | %d enemy | wp %d/%d", 
@@ -692,14 +682,12 @@ local function mainLoop()
                         Color3.fromRGB(100, 180, 255)
                     )
                 else
-                    -- ⭐ KITE - pakai LOGIC PATHFINDING YANG SAMA
-                    -- bedanya cuma target-nya safe point
+                    -- KITE: jarak < 45, jauhi ke titik berjarak 100 stud dari enemy
                     local safePoint = findSafePointAroundEnemy(enemyPos, myPos)
                     if safePoint then
                         requestPath(safePoint, "retreat")
                         followPath()
                     end
-                    attackEnemy(enemy)
                     
                     setStatus(
                         string.format("Kiting (%.1f) | %d enemy | wp %d/%d", 
@@ -722,8 +710,9 @@ task.spawn(function()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v61 - LOADED    ║")
-    print("║   Kite pakai pathfinding sama      ║")
+    print("║   AUTO FARM KAITUN v63 - LOADED    ║")
+    print("║   Tanpa walkspeed modifier         ║")
+    print("║   Kite distance 100 stud           ║")
     print("╚════════════════════════════════════╝")
     
     setStatus("Starting...", Color3.fromRGB(255, 220, 100))
@@ -739,7 +728,6 @@ task.spawn(function()
         task.wait(0.5) 
     end
     
-    applyWalkSpeed()
     setShiftlock(true)
     
     setStatus("Running", Color3.fromRGB(100, 220, 100))
@@ -750,7 +738,6 @@ end)
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(2)
     if State.Running then
-        applyWalkSpeed()
         setShiftlock(true)
     end
 end)
