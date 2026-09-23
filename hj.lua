@@ -1,15 +1,17 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v70                    ║
--- ║   Kite: compute semua titik tiap loop     ║
+-- ║   AUTO FARM KAITUN v68                    ║
+-- ║   Tanpa walkspeed modifier                ║
+-- ║   Kite: titik terjauh yang reachable      ║
 -- ╚══════════════════════════════════════════╝
 
 local CONFIG = {
     KeepDistance = 45,
     KiteMinDistance = 60,
     KiteMaxDistance = 150,
-    KiteDistanceStep = 3,      -- 100,110,...,250 = 16 ring
-    KiteAngleCount = 60,        -- 24 sudut = 15° step
-    AttackCooldown = 0.5,
+    KiteDistanceStep = 3,
+    KiteAngleCount = 30,
+    KiteMaxChecks = 30,         -- batas ComputeAsync biar ga lag
+    AttackCooldown = 0.1,
     LoopDelay = 0.03,
     
     WaypointReached = 3,
@@ -536,6 +538,7 @@ local function resetPath()
     State.PathGoalType = nil
 end
 
+-- ⭐ REQUEST PATH (async) - buat approach
 local function requestPath(targetPos, goalType)
     if not State.Humanoid or not State.RootPart then return end
     if not targetPos then return end
@@ -584,6 +587,7 @@ local function requestPath(targetPos, goalType)
     end)
 end
 
+-- ⭐ FOLLOW PATH
 local function followPath()
     if not State.Humanoid or not State.RootPart then return end
     if not State.PathWaypoints then return end
@@ -605,22 +609,37 @@ local function followPath()
     end
 end
 
--- ⭐ COMPUTE SEMUA TITIK tiap loop, pilih paling jauh yang reachable
-local function computeBestKitePoint(myPos, enemyPos)
+-- ⭐ TRY COMPUTE PATH (sync) - validasi reachable + dapet waypoints sekalian
+local function tryComputePath(fromPos, toPos)
+    local path = PathfindingService:CreatePath({
+        AgentRadius = CONFIG.AgentRadius,
+        AgentHeight = CONFIG.AgentHeight,
+        AgentCanJump = CONFIG.AgentCanJump,
+        AgentJumpHeight = CONFIG.AgentJumpHeight,
+        AgentMaxSlope = CONFIG.AgentMaxSlope,
+        Costs = { Water = 50 },
+    })
+    local ok = pcall(function() path:ComputeAsync(fromPos, toPos) end)
+    if ok and path.Status == Enum.PathStatus.Success then
+        return path:GetWaypoints()
+    end
+    return nil
+end
+
+-- ⭐ SAFE POINT - pilih titik TERJAUH dari enemy yang REACHABLE
+--                urutan: ring terluar → dalam, tiap ring 16 sudut
+--                max KiteMaxChecks kali compute biar ga lag
+local function findSafePointAroundEnemy(enemyPos, myPos)
     local step = math.max(1, CONFIG.KiteDistanceStep)
     local angleCount = math.max(4, CONFIG.KiteAngleCount)
+    local maxChecks = math.max(1, CONFIG.KiteMaxChecks)
+    local checked = 0
     
-    local bestPoint = nil
-    local bestWaypoints = nil
-    local bestDist = -math.huge
-    local validCount = 0
-    local totalCount = 0
-    
-    -- loop dari ring terluar (paling jauh) → dalam
     local radius = CONFIG.KiteMaxDistance
     while radius >= CONFIG.KiteMinDistance - 0.01 do
         for ai = 0, angleCount - 1 do
-            totalCount = totalCount + 1
+            if checked >= maxChecks then break end
+            checked = checked + 1
             
             local angle = (ai / angleCount) * math.pi * 2
             local offset = Vector3.new(math.cos(angle), 0, math.sin(angle))
@@ -630,34 +649,26 @@ local function computeBestKitePoint(myPos, enemyPos)
                 enemyPos.Z + offset.Z * radius
             )
             
-            local path = PathfindingService:CreatePath({
-                AgentRadius = CONFIG.AgentRadius,
-                AgentHeight = CONFIG.AgentHeight,
-                AgentCanJump = CONFIG.AgentCanJump,
-                AgentJumpHeight = CONFIG.AgentJumpHeight,
-                AgentMaxSlope = CONFIG.AgentMaxSlope,
-                Costs = { Water = 50 },
-            })
-            local ok = pcall(function() path:ComputeAsync(myPos, point) end)
-            
-            if ok and path.Status == Enum.PathStatus.Success then
-                validCount = validCount + 1
-                local d = (point - enemyPos).Magnitude
-                if d > bestDist then
-                    bestDist = d
-                    bestPoint = point
-                    bestWaypoints = path:GetWaypoints()
-                end
+            local waypoints = tryComputePath(myPos, point)
+            if waypoints then
+                return point, waypoints
             end
         end
+        if checked >= maxChecks then break end
         radius = radius - step
     end
     
-    return bestPoint, bestWaypoints, validCount, totalCount
-end
-
-local function findSafePointAroundEnemy(enemyPos, myPos)
-    return computeBestKitePoint(myPos, enemyPos)
+    -- Fallback: arah menjauh dari enemy di ring terjauh, biar pathfinder yang coba
+    local dir = Vector3.new(myPos.X - enemyPos.X, 0, myPos.Z - enemyPos.Z)
+    if dir.Magnitude < 0.1 then dir = Vector3.new(1, 0, 0) end
+    dir = dir.Unit
+    local point = Vector3.new(
+        enemyPos.X + dir.X * CONFIG.KiteMaxDistance,
+        myPos.Y,
+        enemyPos.Z + dir.Z * CONFIG.KiteMaxDistance
+    )
+    local waypoints = tryComputePath(myPos, point)
+    return point, waypoints
 end
 
 local function attackEnemy(enemy)
@@ -709,8 +720,8 @@ local function mainLoop()
                         Color3.fromRGB(100, 180, 255)
                     )
                 else
-                    -- KITE: compute semua titik tiap loop
-                    local safePoint, waypoints, validCount, totalCount = findSafePointAroundEnemy(enemyPos, myPos)
+                    -- KITE: titik terjauh yang reachable
+                    local safePoint, waypoints = findSafePointAroundEnemy(enemyPos, myPos)
                     if safePoint and waypoints then
                         State.PathWaypoints = waypoints
                         State.PathIndex = 2
@@ -740,8 +751,9 @@ task.spawn(function()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v70 - LOADED    ║")
-    print("║   Kite: compute tiap loop          ║")
+    print("║   AUTO FARM KAITUN v68 - LOADED    ║")
+    print("║   Tanpa walkspeed modifier         ║")
+    print("║   Kite: titik terjauh reachable    ║")
     print("╚════════════════════════════════════╝")
     
     setStatus("Starting...", Color3.fromRGB(255, 220, 100))
