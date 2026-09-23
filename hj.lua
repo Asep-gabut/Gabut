@@ -6,11 +6,11 @@
 
 local CONFIG = {
     KeepDistance = 45,
-    KiteMinDistance = 20,
-    KiteMaxDistance = 60,
-    KiteDistanceStep = 3,
+    KiteMinDistance = 50,
+    KiteMaxDistance = 100,
+    KiteDistanceStep = 2,
     KiteAngleCount = 30,
-    KiteMaxChecks = 39,         -- batas ComputeAsync biar ga lag
+    KiteMaxChecks = 750,         -- batas ComputeAsync biar ga lag
     AttackCooldown = 0.1,
     LoopDelay = 0.03,
     
