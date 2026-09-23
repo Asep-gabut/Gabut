@@ -1,16 +1,17 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v63                    ║
--- ║   Tanpa walkspeed modifier                ║
--- ║   Kite distance 100 stud                  ║
+-- ║   AUTO FARM KAITUN v70                    ║
+-- ║   Kite: compute semua titik tiap loop     ║
 -- ╚══════════════════════════════════════════╝
 
 local CONFIG = {
-    KeepDistance = 45,       -- jarak approach ke enemy
-    KiteDistance = 100,      -- jarak kite (jauhi enemy sampe 100 stud)
+    KeepDistance = 45,
+    KiteMinDistance = 60,
+    KiteMaxDistance = 150,
+    KiteDistanceStep = 3,      -- 100,110,...,250 = 16 ring
+    KiteAngleCount = 60,        -- 24 sudut = 15° step
     AttackCooldown = 0.5,
     LoopDelay = 0.03,
     
-    -- Pathfinding
     WaypointReached = 3,
     WaypointSkip = 0,
     AgentRadius = 2,
@@ -535,7 +536,6 @@ local function resetPath()
     State.PathGoalType = nil
 end
 
--- ⭐ REQUEST PATH - sama buat approach & kite
 local function requestPath(targetPos, goalType)
     if not State.Humanoid or not State.RootPart then return end
     if not targetPos then return end
@@ -565,7 +565,6 @@ local function requestPath(targetPos, goalType)
         
         if ok and path.Status == Enum.PathStatus.Success then
             local waypoints = path:GetWaypoints()
-            
             if CONFIG.WaypointSkip > 0 and #waypoints > 2 + CONFIG.WaypointSkip then
                 local newWaypoints = {}
                 table.insert(newWaypoints, waypoints[1])
@@ -577,7 +576,6 @@ local function requestPath(targetPos, goalType)
                 end
                 waypoints = newWaypoints
             end
-            
             State.PathWaypoints = waypoints
             State.PathIndex = 2
         else
@@ -586,10 +584,8 @@ local function requestPath(targetPos, goalType)
     end)
 end
 
--- ⭐ FOLLOW PATH - sama buat approach & kite
 local function followPath()
     if not State.Humanoid or not State.RootPart then return end
-    
     if not State.PathWaypoints then return end
     if State.PathIndex > #State.PathWaypoints then return end
     
@@ -609,27 +605,59 @@ local function followPath()
     end
 end
 
--- ⭐ SAFE POINT - cari titik berjarak KiteDistance (100 stud) dari enemy,
---                pilih yang paling dekat dengan posisi kita sekarang
-local function findSafePointAroundEnemy(enemyPos, myPos)
+-- ⭐ COMPUTE SEMUA TITIK tiap loop, pilih paling jauh yang reachable
+local function computeBestKitePoint(myPos, enemyPos)
+    local step = math.max(1, CONFIG.KiteDistanceStep)
+    local angleCount = math.max(4, CONFIG.KiteAngleCount)
+    
     local bestPoint = nil
-    local bestDist = math.huge
-    local samples = 24
-    for i = 0, samples - 1 do
-        local angle = (i / samples) * math.pi * 2
-        local offset = Vector3.new(math.cos(angle), 0, math.sin(angle))
-        local point = Vector3.new(
-            enemyPos.X + offset.X * CONFIG.KiteDistance,
-            myPos.Y,
-            enemyPos.Z + offset.Z * CONFIG.KiteDistance
-        )
-        local d = (point - myPos).Magnitude
-        if d < bestDist then
-            bestDist = d
-            bestPoint = point
+    local bestWaypoints = nil
+    local bestDist = -math.huge
+    local validCount = 0
+    local totalCount = 0
+    
+    -- loop dari ring terluar (paling jauh) → dalam
+    local radius = CONFIG.KiteMaxDistance
+    while radius >= CONFIG.KiteMinDistance - 0.01 do
+        for ai = 0, angleCount - 1 do
+            totalCount = totalCount + 1
+            
+            local angle = (ai / angleCount) * math.pi * 2
+            local offset = Vector3.new(math.cos(angle), 0, math.sin(angle))
+            local point = Vector3.new(
+                enemyPos.X + offset.X * radius,
+                myPos.Y,
+                enemyPos.Z + offset.Z * radius
+            )
+            
+            local path = PathfindingService:CreatePath({
+                AgentRadius = CONFIG.AgentRadius,
+                AgentHeight = CONFIG.AgentHeight,
+                AgentCanJump = CONFIG.AgentCanJump,
+                AgentJumpHeight = CONFIG.AgentJumpHeight,
+                AgentMaxSlope = CONFIG.AgentMaxSlope,
+                Costs = { Water = 50 },
+            })
+            local ok = pcall(function() path:ComputeAsync(myPos, point) end)
+            
+            if ok and path.Status == Enum.PathStatus.Success then
+                validCount = validCount + 1
+                local d = (point - enemyPos).Magnitude
+                if d > bestDist then
+                    bestDist = d
+                    bestPoint = point
+                    bestWaypoints = path:GetWaypoints()
+                end
+            end
         end
+        radius = radius - step
     end
-    return bestPoint
+    
+    return bestPoint, bestWaypoints, validCount, totalCount
+end
+
+local function findSafePointAroundEnemy(enemyPos, myPos)
+    return computeBestKitePoint(myPos, enemyPos)
 end
 
 local function attackEnemy(enemy)
@@ -667,11 +695,10 @@ local function mainLoop()
                 
                 State.LockedEnemyPos = enemyPos
                 
-                -- ⭐ Selalu attack selama ada enemy
                 attackEnemy(enemy)
                 
                 if dist > CONFIG.KeepDistance then
-                    -- APPROACH: jarak > 45, dekati pakai pathfinding
+                    -- APPROACH
                     requestPath(enemyPos, "approach")
                     followPath()
                     
@@ -682,10 +709,13 @@ local function mainLoop()
                         Color3.fromRGB(100, 180, 255)
                     )
                 else
-                    -- KITE: jarak < 45, jauhi ke titik berjarak 100 stud dari enemy
-                    local safePoint = findSafePointAroundEnemy(enemyPos, myPos)
-                    if safePoint then
-                        requestPath(safePoint, "retreat")
+                    -- KITE: compute semua titik tiap loop
+                    local safePoint, waypoints, validCount, totalCount = findSafePointAroundEnemy(enemyPos, myPos)
+                    if safePoint and waypoints then
+                        State.PathWaypoints = waypoints
+                        State.PathIndex = 2
+                        State.PathTargetPos = safePoint
+                        State.PathGoalType = "retreat"
                         followPath()
                     end
                     
@@ -710,9 +740,8 @@ task.spawn(function()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v63 - LOADED    ║")
-    print("║   Tanpa walkspeed modifier         ║")
-    print("║   Kite distance 100 stud           ║")
+    print("║   AUTO FARM KAITUN v70 - LOADED    ║")
+    print("║   Kite: compute tiap loop          ║")
     print("╚════════════════════════════════════╝")
     
     setStatus("Starting...", Color3.fromRGB(255, 220, 100))
