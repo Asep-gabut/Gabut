@@ -10,7 +10,7 @@ local CONFIG = {
     KiteMaxDistance = 60,
     KiteDistanceStep = 3,
     KiteAngleCount = 30,
-    KiteMaxChecks = 399,         -- batas ComputeAsync biar ga lag
+    KiteMaxChecks = 39,         -- batas ComputeAsync biar ga lag
     AttackCooldown = 0.1,
     LoopDelay = 0.03,
     
@@ -20,7 +20,7 @@ local CONFIG = {
     AgentHeight = 6,
     AgentCanJump = true,
     AgentJumpHeight = 15,
-    AgentMaxSlope = 40,
+    AgentMaxSlope = 30,
     
     AutoUpgrade = true,
     AutoReconnect = true,
