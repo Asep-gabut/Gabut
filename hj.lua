@@ -10,7 +10,7 @@ local CONFIG = {
     KiteMaxDistance = 150,
     KiteDistanceStep = 3,
     KiteAngleCount = 30,
-    KiteMaxChecks = 30,         -- batas ComputeAsync biar ga lag
+    KiteMaxChecks = 900,         -- batas ComputeAsync biar ga lag
     AttackCooldown = 0.1,
     LoopDelay = 0.03,
     
