@@ -1,9 +1,6 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v68                    ║
--- ║   Tanpa walkspeed modifier                ║
--- ║   Kite ring 50-100 stud                   ║
--- ║   MaxAttack = KeepDistance (45)           ║
--- ║   Approach repath cuma kalau enemy gerak  ║
+-- ║   AUTO FARM KAITUN v70                    ║
+-- ║   Kite: validasi reachable aja            ║
 -- ╚══════════════════════════════════════════╝
 
 local CONFIG = {
@@ -11,14 +8,16 @@ local CONFIG = {
     AttackCooldown = 0.5,
     LoopDelay = 0.03,
     
-    -- Approach: recompute path hanya kalau enemy geser > threshold
     ApproachRepathThreshold = 5,
     
     -- Kite ring
-    KiteMinRadius = 1,
+    KiteMinRadius = 2,
     KiteMaxRadius = 20,
     KiteRadiusStep = 1,
-    KiteAnglesPerRing = 30,
+    KiteAnglesPerRing = 360,
+    
+    -- Kite pathfinding validation
+    KitePathCheckMax = 9999,
     
     -- Pathfinding
     WaypointReached = 3,
@@ -67,6 +66,21 @@ local State = {
     LastApproachEnemyPos = nil,
     LockedEnemyPos = nil, ShiftlockSaved = nil,
 }
+
+local kitePathObj = nil
+local function getKitePathObject()
+    if not kitePathObj then
+        kitePathObj = PathfindingService:CreatePath({
+            AgentRadius = CONFIG.AgentRadius,
+            AgentHeight = CONFIG.AgentHeight,
+            AgentCanJump = CONFIG.AgentCanJump,
+            AgentJumpHeight = CONFIG.AgentJumpHeight,
+            AgentMaxSlope = CONFIG.AgentMaxSlope,
+            Costs = { Water = 50 },
+        })
+    end
+    return kitePathObj
+end
 
 -- ═══════════════════════════════════════════
 --              STATUS OVERLAY
@@ -619,10 +633,25 @@ local function followPath()
     end
 end
 
-local function findSafePointAroundPlayer(enemyPos, myPos)
-    local bestPoint = nil
-    local bestScore = -math.huge
+-- ⭐ Cek reachable aja (tanpa winding check)
+local function isPointReachable(targetPos, myPos)
+    local path = getKitePathObject()
+    local ok = pcall(function()
+        path:ComputeAsync(myPos, targetPos)
+    end)
     
+    if not ok then return false end
+    if path.Status ~= Enum.PathStatus.Success then return false end
+    
+    local waypoints = path:GetWaypoints()
+    if #waypoints < 2 then return false end
+    
+    return true
+end
+
+-- ⭐ SAFE POINT - sort by jarak ke enemy, cek reachable satu per satu
+local function findSafePointAroundPlayer(enemyPos, myPos)
+    local candidates = {}
     for radius = CONFIG.KiteMinRadius, CONFIG.KiteMaxRadius, CONFIG.KiteRadiusStep do
         for i = 0, CONFIG.KiteAnglesPerRing - 1 do
             local angle = (i / CONFIG.KiteAnglesPerRing) * math.pi * 2
@@ -633,13 +662,20 @@ local function findSafePointAroundPlayer(enemyPos, myPos)
                 myPos.Z + offset.Z * radius
             )
             local distToEnemy = (point - enemyPos).Magnitude
-            if distToEnemy > bestScore then
-                bestScore = distToEnemy
-                bestPoint = point
-            end
+            table.insert(candidates, {pos = point, dist = distToEnemy})
         end
     end
-    return bestPoint
+    
+    table.sort(candidates, function(a, b) return a.dist > b.dist end)
+    
+    local maxChecks = math.min(#candidates, CONFIG.KitePathCheckMax)
+    for i = 1, maxChecks do
+        if isPointReachable(candidates[i].pos, myPos) then
+            return candidates[i].pos
+        end
+    end
+    
+    return nil
 end
 
 local function attackEnemy(enemy)
@@ -654,12 +690,6 @@ local function attackEnemy(enemy)
     return true
 end
 
--- ⭐ APPROACH - repath cuma kalau:
---   1. Belum ada path
---   2. Goal sebelumnya bukan approach
---   3. Belum nyatet posisi enemy
---   4. Path udah abis dilalui (biar nggak stuck)
---   5. Enemy geser ≥ threshold dari posisi terakhir repath
 local function approachEnemy(enemyPos)
     local needRepath = false
     
@@ -709,13 +739,11 @@ local function mainLoop()
                 
                 State.LockedEnemyPos = enemyPos
                 
-                -- Attack cuma kalau dalam jangkauan (dist <= 45)
                 if dist <= CONFIG.KeepDistance then
                     attackEnemy(enemy)
                 end
                 
                 if dist > CONFIG.KeepDistance then
-                    -- APPROACH: repath cuma kalau enemy gerak / path abis
                     approachEnemy(enemyPos)
                     
                     setStatus(
@@ -725,7 +753,6 @@ local function mainLoop()
                         Color3.fromRGB(100, 180, 255)
                     )
                 else
-                    -- KITE: kabur ke ring 50-100 stud
                     local safePoint = findSafePointAroundPlayer(enemyPos, myPos)
                     if safePoint then
                         requestPath(safePoint, "retreat")
@@ -753,11 +780,7 @@ task.spawn(function()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v68 - LOADED    ║")
-    print("║   Tanpa walkspeed modifier         ║")
-    print("║   Kite ring 50-100 stud            ║")
-    print("║   MaxAttack = KeepDistance (45)    ║")
-    print("║   Approach repath kalau enemy gerak║")
+    print("║   AUTO FARM KAITUN v70 - LOADED    ║")
     print("╚════════════════════════════════════╝")
     
     setStatus("Starting...", Color3.fromRGB(255, 220, 100))
