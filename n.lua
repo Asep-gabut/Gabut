@@ -26,6 +26,7 @@ local COMBO = {
 	{ slot = 2, press = false, delay = 0,                    arg6 = false },
 	{ slot = 3, press = false, delay = 0,                    arg6 = false },
 	{ slot = 4, press = false, delay = 0,                    arg6 = false },
+	{ slot = 5, press = false, delay = 0.14999999999999997,  arg6 = false },
 }
 
 local function attackFire(entry)
