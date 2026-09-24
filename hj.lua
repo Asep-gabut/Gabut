@@ -1,17 +1,23 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v63                    ║
+-- ║   AUTO FARM KAITUN v66                    ║
 -- ║   Tanpa walkspeed modifier                ║
--- ║   Kite distance 100 stud                  ║
+-- ║   Kite ring 50-100 stud                   ║
+-- ║   MaxAttackDistance = KeepDistance        ║
 -- ╚══════════════════════════════════════════╝
 
 local CONFIG = {
-    KeepDistance = 45,       -- jarak approach ke enemy
-    KiteDistance = 100,      -- jarak kite (jauhi enemy sampe 100 stud)
-    AttackCooldown = 0.1,
+    KeepDistance = 45,       -- jarak approach & max attack distance (digabung)
+    AttackCooldown = 0.5,
     LoopDelay = 0.03,
     
+    -- Kite ring
+    KiteMinRadius = 50,
+    KiteMaxRadius = 100,
+    KiteRadiusStep = 10,
+    KiteAnglesPerRing = 16,
+    
     -- Pathfinding
-    WaypointReached = 4,
+    WaypointReached = 3,
     WaypointSkip = 0,
     AgentRadius = 2,
     AgentHeight = 6,
@@ -535,7 +541,6 @@ local function resetPath()
     State.PathGoalType = nil
 end
 
--- ⭐ REQUEST PATH - sama buat approach & kite
 local function requestPath(targetPos, goalType)
     if not State.Humanoid or not State.RootPart then return end
     if not targetPos then return end
@@ -586,7 +591,6 @@ local function requestPath(targetPos, goalType)
     end)
 end
 
--- ⭐ FOLLOW PATH - sama buat approach & kite
 local function followPath()
     if not State.Humanoid or not State.RootPart then return end
     
@@ -609,24 +613,24 @@ local function followPath()
     end
 end
 
--- ⭐ SAFE POINT - cari titik berjarak KiteDistance (100 stud) dari enemy,
---                pilih yang paling dekat dengan posisi kita sekarang
-local function findSafePointAroundEnemy(enemyPos, myPos)
+local function findSafePointAroundPlayer(enemyPos, myPos)
     local bestPoint = nil
-    local bestDist = math.huge
-    local samples = 24
-    for i = 0, samples - 1 do
-        local angle = (i / samples) * math.pi * 2
-        local offset = Vector3.new(math.cos(angle), 0, math.sin(angle))
-        local point = Vector3.new(
-            enemyPos.X + offset.X * CONFIG.KiteDistance,
-            myPos.Y,
-            enemyPos.Z + offset.Z * CONFIG.KiteDistance
-        )
-        local d = (point - myPos).Magnitude
-        if d < bestDist then
-            bestDist = d
-            bestPoint = point
+    local bestScore = -math.huge
+    
+    for radius = CONFIG.KiteMinRadius, CONFIG.KiteMaxRadius, CONFIG.KiteRadiusStep do
+        for i = 0, CONFIG.KiteAnglesPerRing - 1 do
+            local angle = (i / CONFIG.KiteAnglesPerRing) * math.pi * 2
+            local offset = Vector3.new(math.cos(angle), 0, math.sin(angle))
+            local point = Vector3.new(
+                myPos.X + offset.X * radius,
+                myPos.Y,
+                myPos.Z + offset.Z * radius
+            )
+            local distToEnemy = (point - enemyPos).Magnitude
+            if distToEnemy > bestScore then
+                bestScore = distToEnemy
+                bestPoint = point
+            end
         end
     end
     return bestPoint
@@ -667,11 +671,14 @@ local function mainLoop()
                 
                 State.LockedEnemyPos = enemyPos
                 
-                -- ⭐ Selalu attack selama ada enemy
-                attackEnemy(enemy)
+                -- ⭐ MaxAttackDistance = KeepDistance (digabung)
+                -- Attack cuma kalau jarak <= KeepDistance
+                if dist <= CONFIG.KeepDistance then
+                    attackEnemy(enemy)
+                end
                 
                 if dist > CONFIG.KeepDistance then
-                    -- APPROACH: jarak > 45, dekati pakai pathfinding
+                    -- APPROACH: jarak > 45, dekati pakai pathfinding (tanpa attack)
                     requestPath(enemyPos, "approach")
                     followPath()
                     
@@ -682,8 +689,8 @@ local function mainLoop()
                         Color3.fromRGB(100, 180, 255)
                     )
                 else
-                    -- KITE: jarak < 45, jauhi ke titik berjarak 100 stud dari enemy
-                    local safePoint = findSafePointAroundEnemy(enemyPos, myPos)
+                    -- KITE: jarak <= 45, kabur ke ring 50-100 stud (sambil attack)
+                    local safePoint = findSafePointAroundPlayer(enemyPos, myPos)
                     if safePoint then
                         requestPath(safePoint, "retreat")
                         followPath()
@@ -710,9 +717,10 @@ task.spawn(function()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v63 - LOADED    ║")
+    print("║   AUTO FARM KAITUN v66 - LOADED    ║")
     print("║   Tanpa walkspeed modifier         ║")
-    print("║   Kite distance 100 stud           ║")
+    print("║   Kite ring 50-100 stud            ║")
+    print("║   MaxAttack = KeepDistance (45)    ║")
     print("╚════════════════════════════════════╝")
     
     setStatus("Starting...", Color3.fromRGB(255, 220, 100))
