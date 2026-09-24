@@ -1,16 +1,20 @@
+-- // Rayfield Gen2
+getgenv().RAYFIELD_SECURE = true
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
+
 -- // Services
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local player = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
 
 local humanoids = workspace:WaitForChild("Humanoids")
 local regions = humanoids:WaitForChild("Regions")
 
+------------------------------------------------------------
 -- // State
+------------------------------------------------------------
 local selectedArea = nil
 local targetEnemyName = nil
 local currentEnemy = nil
@@ -18,6 +22,7 @@ local followThread = nil
 local killThread = nil
 local activeTween = nil
 local isHolding = false
+local isHunting = false
 
 -- // Setting
 local BEHIND_DISTANCE = 4
@@ -49,209 +54,8 @@ local function attackHoldStop()
 end
 
 ------------------------------------------------------------
--- // GUI
-------------------------------------------------------------
-local gui = Instance.new("ScreenGui")
-gui.Name = "EnemySelectorGUI"
-gui.ResetOnSpawn = false
-gui.Parent = playerGui
-
-local toggle = Instance.new("TextButton")
-toggle.Size = UDim2.new(0, 60, 0, 60)
-toggle.Position = UDim2.new(1, -80, 1, -80)
-toggle.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
-toggle.Text = "⚔"
-toggle.TextSize = 28
-toggle.TextColor3 = Color3.fromRGB(255, 220, 120)
-toggle.Font = Enum.Font.GothamBold
-toggle.BorderSizePixel = 0
-toggle.Parent = gui
-Instance.new("UICorner", toggle).CornerRadius = UDim.new(1, 0)
-local togStroke = Instance.new("UIStroke", toggle)
-togStroke.Color = Color3.fromRGB(255, 220, 120)
-togStroke.Thickness = 2
-
-local main = Instance.new("Frame")
-main.Size = UDim2.new(0, 300, 0, 450)
-main.Position = UDim2.new(0.5, -150, 0.5, -225)
-main.BackgroundColor3 = Color3.fromRGB(25, 25, 32)
-main.BorderSizePixel = 0
-main.Visible = false
-main.Active = true
-main.Parent = gui
-Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
-local mainStroke = Instance.new("UIStroke", main)
-mainStroke.Color = Color3.fromRGB(255, 220, 120)
-mainStroke.Thickness = 2
-
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 40)
-title.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
-title.Text = "  ⚔  Enemy Selector"
-title.TextColor3 = Color3.fromRGB(255, 220, 120)
-title.Font = Enum.Font.GothamBold
-title.TextSize = 16
-title.TextXAlignment = Enum.TextXAlignment.Left
-title.BorderSizePixel = 0
-title.Parent = main
-Instance.new("UICorner", title).CornerRadius = UDim.new(0, 12)
-
-local closeBtn = Instance.new("TextButton")
-closeBtn.Size = UDim2.new(0, 30, 0, 30)
-closeBtn.Position = UDim2.new(1, -36, 0, 5)
-closeBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
-closeBtn.Text = "X"
-closeBtn.TextColor3 = Color3.fromRGB(255,255,255)
-closeBtn.Font = Enum.Font.GothamBold
-closeBtn.TextSize = 14
-closeBtn.BorderSizePixel = 0
-closeBtn.Parent = main
-Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(1,0)
-closeBtn.MouseButton1Click:Connect(function() main.Visible = false end)
-
-local dragging, dragStart, startPos
-title.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1
-	or input.UserInputType == Enum.UserInputType.Touch then
-		dragging = true
-		dragStart = input.Position
-		startPos = main.Position
-		input.Changed:Connect(function()
-			if input.UserInputState == Enum.UserInputState.End then
-				dragging = false
-			end
-		end)
-	end
-end)
-UserInputService.InputChanged:Connect(function(input)
-	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-	or input.UserInputType == Enum.UserInputType.Touch) then
-		local delta = input.Position - dragStart
-		main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X,
-		                          startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-	end
-end)
-
-local areaLabel = Instance.new("TextLabel")
-areaLabel.Size = UDim2.new(1, -20, 0, 22)
-areaLabel.Position = UDim2.new(0, 10, 0, 48)
-areaLabel.BackgroundTransparency = 1
-areaLabel.Text = "📍 Area:"
-areaLabel.TextColor3 = Color3.fromRGB(200,200,200)
-areaLabel.Font = Enum.Font.GothamBold
-areaLabel.TextSize = 13
-areaLabel.TextXAlignment = Enum.TextXAlignment.Left
-areaLabel.Parent = main
-
-local areaScroll = Instance.new("ScrollingFrame")
-areaScroll.Size = UDim2.new(1, -20, 0, 110)
-areaScroll.Position = UDim2.new(0, 10, 0, 72)
-areaScroll.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
-areaScroll.BorderSizePixel = 0
-areaScroll.ScrollBarThickness = 4
-areaScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-areaScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-areaScroll.Parent = main
-Instance.new("UICorner", areaScroll).CornerRadius = UDim.new(0, 8)
-local areaLayout = Instance.new("UIListLayout", areaScroll)
-areaLayout.Padding = UDim.new(0, 4)
-local areaPad = Instance.new("UIPadding", areaScroll)
-areaPad.PaddingTop = UDim.new(0,4)
-areaPad.PaddingBottom = UDim.new(0,4)
-areaPad.PaddingLeft = UDim.new(0,4)
-areaPad.PaddingRight = UDim.new(0,4)
-
-local enemyLabel = Instance.new("TextLabel")
-enemyLabel.Size = UDim2.new(1, -20, 0, 22)
-enemyLabel.Position = UDim2.new(0, 10, 0, 188)
-enemyLabel.BackgroundTransparency = 1
-enemyLabel.Text = "👹 Nama Enemy:"
-enemyLabel.TextColor3 = Color3.fromRGB(200,200,200)
-enemyLabel.Font = Enum.Font.GothamBold
-enemyLabel.TextSize = 13
-enemyLabel.TextXAlignment = Enum.TextXAlignment.Left
-enemyLabel.Parent = main
-
-local enemyScroll = Instance.new("ScrollingFrame")
-enemyScroll.Size = UDim2.new(1, -20, 0, 110)
-enemyScroll.Position = UDim2.new(0, 10, 0, 212)
-enemyScroll.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
-enemyScroll.BorderSizePixel = 0
-enemyScroll.ScrollBarThickness = 4
-enemyScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-enemyScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-enemyScroll.Parent = main
-Instance.new("UICorner", enemyScroll).CornerRadius = UDim.new(0, 8)
-local enemyLayout = Instance.new("UIListLayout", enemyScroll)
-enemyLayout.Padding = UDim.new(0, 4)
-local enemyPad = Instance.new("UIPadding", enemyScroll)
-enemyPad.PaddingTop = UDim.new(0,4)
-enemyPad.PaddingBottom = UDim.new(0,4)
-enemyPad.PaddingLeft = UDim.new(0,4)
-enemyPad.PaddingRight = UDim.new(0,4)
-
-local attackBtn = Instance.new("TextButton")
-attackBtn.Size = UDim2.new(1, -20, 0, 46)
-attackBtn.Position = UDim2.new(0, 10, 0, 330)
-attackBtn.BackgroundColor3 = Color3.fromRGB(60, 150, 80)
-attackBtn.Text = "HUNTING..."
-attackBtn.TextColor3 = Color3.fromRGB(255,255,255)
-attackBtn.Font = Enum.Font.GothamBold
-attackBtn.TextSize = 15
-attackBtn.BorderSizePixel = 0
-attackBtn.Parent = main
-Instance.new("UICorner", attackBtn).CornerRadius = UDim.new(0, 8)
-
-local status = Instance.new("TextLabel")
-status.Size = UDim2.new(1, -20, 0, 60)
-status.Position = UDim2.new(0, 10, 0, 382)
-status.BackgroundTransparency = 1
-status.Text = "Pilih area & nama enemy..."
-status.TextColor3 = Color3.fromRGB(180,180,180)
-status.Font = Enum.Font.Gotham
-status.TextSize = 12
-status.TextWrapped = true
-status.TextYAlignment = Enum.TextYAlignment.Top
-status.Parent = main
-
-------------------------------------------------------------
 -- // Helpers
 ------------------------------------------------------------
-local function clearScroll(scroll)
-	for _, c in ipairs(scroll:GetChildren()) do
-		if c:IsA("TextButton") then c:Destroy() end
-	end
-end
-
-local function makeListButton(parent, text, callback)
-	local btn = Instance.new("TextButton")
-	btn.Size = UDim2.new(1, 0, 0, 32)
-	btn.BackgroundColor3 = Color3.fromRGB(45, 45, 58)
-	btn.Text = text
-	btn.TextColor3 = Color3.fromRGB(230,230,230)
-	btn.Font = Enum.Font.Gotham
-	btn.TextSize = 13
-	btn.BorderSizePixel = 0
-	btn.AutoButtonColor = true
-	btn.Parent = parent
-	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
-	btn.MouseButton1Click:Connect(callback)
-	return btn
-end
-
-local function highlight(container, selectedBtn)
-	for _, b in ipairs(container:GetChildren()) do
-		if b:IsA("TextButton") then
-			b.BackgroundColor3 = Color3.fromRGB(45, 45, 58)
-			b.TextColor3 = Color3.fromRGB(230,230,230)
-		end
-	end
-	if selectedBtn then
-		selectedBtn.BackgroundColor3 = Color3.fromRGB(255, 200, 80)
-		selectedBtn.TextColor3 = Color3.fromRGB(20,20,20)
-	end
-end
-
 local function isEnemyAlive(enemy)
 	if not enemy or not enemy.Parent then return false end
 	local hum = enemy:FindFirstChildOfClass("Humanoid")
@@ -265,20 +69,15 @@ local function getEnemyPart(enemy)
 		or enemy:FindFirstChildWhichIsA("BasePart")
 end
 
--- ✅ FIX Y: pakai posisi Y MUSUH, bukan player
+-- Posisi di BELAKANG musuh, Y ngikut musuh
 local function getBehindCFrame(enemy)
 	local tp = getEnemyPart(enemy)
 	if not tp then return nil end
 
 	local enemyCF = tp.CFrame
-
-	-- Posisi di belakang musuh
 	local behindPos = enemyCF.Position - enemyCF.LookVector * BEHIND_DISTANCE
 
-	-- ⚠️ Y = posisi Y MUSUH (biar sejajar)
 	local targetPos = Vector3.new(behindPos.X, enemyCF.Position.Y, behindPos.Z)
-
-	-- Hadap ke musuh (dari belakang ngadep depan)
 	local lookAtPos = Vector3.new(enemyCF.Position.X, enemyCF.Position.Y, enemyCF.Position.Z)
 
 	return CFrame.new(targetPos, lookAtPos)
@@ -313,7 +112,7 @@ local function startFollow()
 	end
 
 	followThread = task.spawn(function()
-		while targetEnemyName and selectedArea do
+		while isHunting and selectedArea do
 			local char, hum, hrp = getCharacter()
 			if not char then
 				task.wait(0.3)
@@ -337,7 +136,6 @@ local function startFollow()
 						activeTween = mt
 						mt:Play()
 					else
-						-- Udah deket, cuma update rotasi & Y biar presisi
 						hrp.CFrame = targetCF
 					end
 				end
@@ -380,7 +178,7 @@ local function approachEnemy(enemy)
 end
 
 ------------------------------------------------------------
--- // KILL LOOP — hold click selama ada target
+-- // KILL LOOP
 ------------------------------------------------------------
 local function startHunting()
 	if killThread then
@@ -388,18 +186,15 @@ local function startHunting()
 	end
 
 	killThread = task.spawn(function()
-		while targetEnemyName and selectedArea do
+		while isHunting and targetEnemyName and selectedArea do
 			local list = findAllEnemiesWithName()
 
 			if #list == 0 then
 				currentEnemy = nil
-				attackHoldStop()   -- stop hold kalau gak ada target
-				status.Text = "⏳ Nunggu " .. targetEnemyName .. " spawn..."
+				attackHoldStop()
 				task.wait(1)
 				continue
 			end
-
-			status.Text = "🎯 " .. #list .. " " .. targetEnemyName .. " hidup"
 
 			local char, hum, hrp = getCharacter()
 			if not hrp then task.wait(0.5); continue end
@@ -423,22 +218,14 @@ local function startHunting()
 				approachEnemy(closest)
 			end
 
-			-- 🔥 HOLD left click selama musuh masih hidup
 			attackHoldStart()
 
-			-- Tunggu sampai musuh mati (cek tiap 0.15s)
-			while isEnemyAlive(closest) and targetEnemyName and selectedArea do
+			while isEnemyAlive(closest) and isHunting and targetEnemyName do
 				task.wait(0.15)
 			end
 
-			-- Musuh mati → stop hold sebentar sebelum pindah target
 			attackHoldStop()
-			task.wait(0.1)
-
-			if closest and closest.Parent then
-				status.Text = "✅ " .. closest.Name .. " mati, lanjut..."
-			end
-			task.wait(0.2)
+			task.wait(0.15)
 		end
 	end)
 end
@@ -447,7 +234,8 @@ end
 -- // Stop
 ------------------------------------------------------------
 local function stopAll()
-	attackHoldStop()  -- ⚠️ WAJIB: lepas hold biar gak nyangkut
+	attackHoldStop()
+	isHunting = false
 	if followThread then
 		pcall(function() task.cancel(followThread) end)
 		followThread = nil
@@ -466,113 +254,153 @@ local function stopAll()
 end
 
 ------------------------------------------------------------
--- // List refresh
+-- // RAYFIELD UI
 ------------------------------------------------------------
-local refreshEnemies
-refreshEnemies = function()
-	clearScroll(enemyScroll)
-	if not selectedArea then return end
+local window = Rayfield:CreateWindow({
+	name = "Enemy Selector",
+	subtitle = "Rayfield Gen2",
+	sidebarLayout = true,
+	theme = "amethyst",
+})
 
-	local activeNpcs = selectedArea:FindFirstChild("ActiveNpcs")
-	if not activeNpcs then
-		status.Text = "ActiveNpcs kosong di area ini."
-		return
+local tab = window:CreateTab({
+	name = "Main",
+	icon = 93364949241311,
+})
+
+------------------------------------------------------------
+-- // Data helpers
+------------------------------------------------------------
+local function getAreaNames()
+	local names = {}
+	for _, r in ipairs(regions:GetChildren()) do
+		if r:IsA("Folder") or r:IsA("Model") then
+			table.insert(names, r.Name)
+		end
 	end
+	table.sort(names)
+	return names
+end
 
-	local nameCount = {}
+local function getEnemyNames()
+	local counts = {}
+	if not selectedArea then return counts end
+	local activeNpcs = selectedArea:FindFirstChild("ActiveNpcs")
+	if not activeNpcs then return counts end
 	for _, npcFolder in ipairs(activeNpcs:GetChildren()) do
 		if npcFolder:IsA("Folder") or npcFolder:IsA("Model") then
 			for _, enemy in ipairs(npcFolder:GetChildren()) do
 				if enemy:IsA("Model") and enemy:FindFirstChildOfClass("Humanoid") then
-					nameCount[enemy.Name] = (nameCount[enemy.Name] or 0) + 1
+					counts[enemy.Name] = (counts[enemy.Name] or 0) + 1
 				end
 			end
 		end
 	end
-
-	local sortedNames = {}
-	for name, _ in pairs(nameCount) do
-		table.insert(sortedNames, name)
-	end
-	table.sort(sortedNames)
-
-	if #sortedNames == 0 then
-		status.Text = "Tidak ada enemy aktif di area ini."
-		return
-	end
-
-	for _, name in ipairs(sortedNames) do
-		local label = name .. "  (" .. nameCount[name] .. ")"
-		local btn
-		btn = makeListButton(enemyScroll, label, function()
-			targetEnemyName = name
-			highlight(enemyScroll, btn)
-			status.Text = "🎯 Target: " .. name
-			startFollow()
-			startHunting()
-			attackBtn.Text = "STOP (F)"
-			attackBtn.BackgroundColor3 = Color3.fromRGB(200, 55, 55)
-		end)
-	end
-
-	status.Text = #sortedNames .. " jenis enemy ditemukan."
+	return counts
 end
 
-local function refreshAreas()
-	clearScroll(areaScroll)
-	for _, region in ipairs(regions:GetChildren()) do
-		if region:IsA("Folder") or region:IsA("Model") then
-			local btn
-			btn = makeListButton(areaScroll, region.Name, function()
-				selectedArea = region
-				targetEnemyName = nil
-				stopAll()
-				attackBtn.Text = "HUNTING..."
-				attackBtn.BackgroundColor3 = Color3.fromRGB(60, 150, 80)
-				highlight(areaScroll, btn)
-				refreshEnemies()
-			end)
+local function buildEnemyList()
+	local counts = getEnemyNames()
+	local list = {}
+	for name, count in pairs(counts) do
+		table.insert(list, name .. "  (" .. count .. ")")
+	end
+	table.sort(list)
+	return list
+end
+
+------------------------------------------------------------
+-- // Dropdowns
+------------------------------------------------------------
+local EnemyDropdown
+
+local AreaDropdown = tab:CreateDropdown({
+	name = "Area",
+	options = getAreaNames(),
+	callback = function(opt)
+		local val = type(opt) == "table" and opt[1] or opt
+		if not val then return end
+
+		local area = regions:FindFirstChild(val)
+		if not area then
+			window:Notify({ title = "Error", content = "Area gak ketemu: " .. val })
+			return
 		end
-	end
-end
 
-------------------------------------------------------------
--- // Toggle stop
-------------------------------------------------------------
-local function toggleStop()
-	if targetEnemyName then
+		selectedArea = area
 		targetEnemyName = nil
 		stopAll()
-		status.Text = "⏹ Stopped."
-		attackBtn.Text = "HUNTING..."
-		attackBtn.BackgroundColor3 = Color3.fromRGB(60, 150, 80)
-	else
-		status.Text = "Pilih nama enemy dulu di list."
-	end
-end
+
+		local list = buildEnemyList()
+		if EnemyDropdown then
+			pcall(function() EnemyDropdown:Refresh(list) end)
+		end
+
+		window:Notify({
+			title = "Area",
+			content = val .. " • " .. #list .. " jenis enemy",
+		})
+	end,
+})
+
+EnemyDropdown = tab:CreateDropdown({
+	name = "Nama Enemy",
+	options = {},
+	callback = function(opt)
+		local val = type(opt) == "table" and opt[1] or opt
+		if not val then return end
+
+		local name = string.match(val, "^(.-)%s+%(%d+%)$") or val
+		targetEnemyName = name
+
+		if not selectedArea then
+			window:Notify({ title = "Pilih area dulu", content = "Belum ada area." })
+			return
+		end
+
+		stopAll()
+		isHunting = true
+		startFollow()
+		startHunting()
+
+		window:Notify({ title = "Hunting", content = "Target: " .. name })
+	end,
+})
 
 ------------------------------------------------------------
--- // Inputs
+-- // Stop button
 ------------------------------------------------------------
-toggle.MouseButton1Click:Connect(function()
-	main.Visible = not main.Visible
-	if main.Visible then refreshAreas() end
-end)
+tab:CreateButton({
+	name = "Stop Hunting",
+	callback = function()
+		stopAll()
+		window:Notify({ title = "Stopped", content = "Hunting dihentikan." })
+	end,
+})
 
-attackBtn.MouseButton1Click:Connect(toggleStop)
+------------------------------------------------------------
+-- // Info
+------------------------------------------------------------
+tab:CreateParagraph({
+	title = "Cara Pakai",
+	content = "1. Pilih Area\n2. Pilih Nama Enemy → auto hunting\n3. Klik Stop buat berhenti\n\nTween: belakang musuh, Y ngikut musuh\nAttack: hold left click",
+})
 
-UserInputService.InputBegan:Connect(function(input, processed)
-	if processed then return end
-	if input.KeyCode == Enum.KeyCode.F then
-		toggleStop()
-	end
-end)
-
+------------------------------------------------------------
+-- // Auto-refresh list tiap 5s
+------------------------------------------------------------
 task.spawn(function()
 	while true do
 		task.wait(5)
-		if main.Visible and selectedArea and not targetEnemyName then
-			refreshEnemies()
+		pcall(function() AreaDropdown:Refresh(getAreaNames()) end)
+
+		if selectedArea and not isHunting then
+			pcall(function() EnemyDropdown:Refresh(buildEnemyList()) end)
 		end
 	end
 end)
+
+window:Notify({
+	title = "Enemy Selector",
+	content = "Loaded • Theme: amethyst",
+})
