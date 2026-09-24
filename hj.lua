@@ -17,7 +17,7 @@ local CONFIG = {
     KiteAnglesPerRing = 360,
     
     -- Kite pathfinding validation
-    KitePathCheckMax = 999,
+    KitePathCheckMax = 200,
     
     -- Pathfinding
     WaypointReached = 3,
