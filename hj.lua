@@ -17,7 +17,7 @@ local CONFIG = {
     -- Kite ring
     KiteMinRadius = 1,
     KiteMaxRadius = 20,
-    KiteRadiusStep = 2,
+    KiteRadiusStep = 1,
     KiteAnglesPerRing = 30,
     
     -- Pathfinding
