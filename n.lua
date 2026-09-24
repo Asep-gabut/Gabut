@@ -4,7 +4,6 @@ local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
 
 -- // Services
 local Players = game:GetService("Players")
-local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player = Players.LocalPlayer
@@ -58,7 +57,7 @@ end
 ------------------------------------------------------------
 local Config = {
 	BehindDistance = 4,
-	FollowInterval = 0.1,
+	FollowInterval = 0.05,
 	AttackInterval = 0.15,
 }
 
@@ -70,7 +69,6 @@ local targetEnemyName = nil
 local currentEnemy = nil
 local followThread = nil
 local killThread = nil
-local activeTween = nil
 local isHunting = false
 
 local function getCharacter()
@@ -132,7 +130,7 @@ local function findAllEnemiesWithName()
 end
 
 ------------------------------------------------------------
--- // FOLLOW LOOP — TWEEN ONLY (no anchor, no anti-gravity)
+-- // FOLLOW LOOP — Set CFrame langsung (no tween, no anchor)
 ------------------------------------------------------------
 local function startFollow()
 	if followThread then
@@ -150,19 +148,7 @@ local function startFollow()
 			if currentEnemy and currentEnemy.Parent and isEnemyAlive(currentEnemy) then
 				local targetCF = getBehindCFrame(currentEnemy)
 				if targetCF then
-					-- Cancel tween lama biar gak numpuk
-					if activeTween then
-						pcall(function() activeTween:Cancel() end)
-					end
-
-					-- Tween langsung, no anchor, no trick
-					local tw = TweenService:Create(
-						hrp,
-						TweenInfo.new(Config.FollowInterval, Enum.EasingStyle.Linear),
-						{CFrame = targetCF}
-					)
-					activeTween = tw
-					tw:Play()
+					hrp.CFrame = targetCF
 				end
 			end
 
@@ -230,10 +216,6 @@ local function stopAll()
 	if killThread then
 		pcall(function() task.cancel(killThread) end)
 		killThread = nil
-	end
-	if activeTween then
-		pcall(function() activeTween:Cancel() end)
-		activeTween = nil
 	end
 
 	currentEnemy = nil
@@ -405,7 +387,7 @@ tab:CreateSlider({
 
 tab:CreateSlider({
 	name = "Follow Interval",
-	range = { 0.03, 0.5 },
+	range = { 0.01, 0.2 },
 	increment = 0.01,
 	value = Config.FollowInterval,
 	suffix = "s",
@@ -432,7 +414,7 @@ tab:CreateSection("Info")
 
 tab:CreateParagraph({
 	title = "Cara Pakai",
-	content = "1. Pilih Area\n2. Pilih Nama Enemy\n3. Nyalain 'Farm Enemy'\n\nFollow: TWEEN ONLY (no anchor, no anti-gravity)\nAttack: combo 1→2→3→4→5",
+	content = "1. Pilih Area\n2. Pilih Nama Enemy\n3. Nyalain 'Farm Enemy'\n\nFollow: set CFrame langsung (no tween, no anchor)\nAttack: combo 1→2→3→4→5",
 })
 
 ------------------------------------------------------------
