@@ -44,7 +44,7 @@ end
 local function attackCycle()
 	attackFire(currentSlot)
 	currentSlot = currentSlot + 1
-	if currentSlot > 3 then currentSlot = 1 end
+	if currentSlot > 4 then currentSlot = 1 end
 end
 
 ------------------------------------------------------------
