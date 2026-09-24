@@ -5,12 +5,58 @@ local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
 -- // Services
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player = Players.LocalPlayer
 
 local humanoids = workspace:WaitForChild("Humanoids")
 local regions = humanoids:WaitForChild("Regions")
+
+local SignalEvent = ReplicatedStorage
+	:WaitForChild("Communication")
+	:WaitForChild("ServerAndClient")
+	:WaitForChild("Signals")
+	:WaitForChild("SignalEvent")
+	:WaitForChild("Event")
+
+------------------------------------------------------------
+-- // ATTACK (HARDCODED — cuma method & slot)
+------------------------------------------------------------
+local ATTACK_SLOTS = { 1, 2, 3, 4, 5 }  -- slot yang di-fire
+
+local function attackFire(slot)
+	local args = {
+		"Combat_Service",
+		"Combat",
+		slot,
+		true,
+		0.038000000000000006,
+		false
+	}
+	local ok, err = pcall(function()
+		SignalEvent:FireServer(unpack(args))
+	end)
+	if not ok then
+		warn("[EnemySel] FireServer error:", err)
+	end
+end
+
+local function attackAll()
+	for _, slot in ipairs(ATTACK_SLOTS) do
+		attackFire(slot)
+	end
+end
+
+------------------------------------------------------------
+-- // CONFIG (semua bisa diubah lewat UI)
+------------------------------------------------------------
+local Config = {
+	BehindDistance = 4,
+	FollowInterval = 0.12,
+	FollowMinDist  = 0.2,
+	ApproachSpeed  = 70,
+	AttackInterval = 0.15,
+}
 
 ------------------------------------------------------------
 -- // State
@@ -23,15 +69,6 @@ local killThread = nil
 local activeTween = nil
 local isHunting = false
 
--- // CONFIG
-local Config = {
-	BehindDistance = 4,
-	FollowInterval = 0.12,
-	FollowMinDist  = 0.2,
-	ApproachSpeed  = 70,
-	AttackInterval = 0.15,
-}
-
 local function getCharacter()
 	local char = player.Character
 	if not char then return nil end
@@ -39,15 +76,6 @@ local function getCharacter()
 	local hrp = char:FindFirstChild("HumanoidRootPart")
 	if hum and hrp then return char, hum, hrp end
 	return nil
-end
-
-------------------------------------------------------------
--- // ATTACK — single click (press + release)
-------------------------------------------------------------
-local function attackClick()
-	VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
-	task.wait(0.02)
-	VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
 end
 
 ------------------------------------------------------------
@@ -174,7 +202,7 @@ local function approachEnemy(enemy)
 end
 
 ------------------------------------------------------------
--- // KILL LOOP — spam attackClick
+-- // KILL LOOP
 ------------------------------------------------------------
 local function startHunting()
 	if killThread then
@@ -213,9 +241,9 @@ local function startHunting()
 				approachEnemy(closest)
 			end
 
-			-- Spam click sampai musuh mati
+			-- Fire slot 1-5, interval dari Config
 			while isEnemyAlive(closest) and isHunting and targetEnemyName do
-				attackClick()
+				attackAll()
 				task.wait(Config.AttackInterval)
 			end
 
@@ -395,7 +423,7 @@ HuntToggle = tab:CreateToggle({
 })
 
 ------------------------------------------------------------
--- // SETTINGS SECTION
+-- // SETTINGS SECTION (semua slider)
 ------------------------------------------------------------
 tab:CreateSection("Settings")
 
@@ -445,7 +473,7 @@ tab:CreateSlider({
 
 tab:CreateSlider({
 	name = "Attack Interval",
-	range = { 0.05, 1 },
+	range = { 0.03, 1 },
 	increment = 0.01,
 	value = Config.AttackInterval,
 	suffix = "s",
@@ -461,7 +489,7 @@ tab:CreateSection("Info")
 
 tab:CreateParagraph({
 	title = "Cara Pakai",
-	content = "1. Pilih Area\n2. Pilih Nama Enemy\n3. Nyalain 'Farm Enemy' → mulai\n4. Matiin toggle → stop\n\nAtur kecepatan, jarak & attack speed di section Settings.",
+	content = "1. Pilih Area\n2. Pilih Nama Enemy\n3. Nyalain 'Farm Enemy'\n4. Atur tuning di section Settings\n\nAttack: fire slot 1-5 (hardcoded)",
 })
 
 ------------------------------------------------------------
