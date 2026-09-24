@@ -20,7 +20,7 @@ local CONFIG = {
     KitePathCheckMax = 9999,
     
     -- Pathfinding
-    WaypointReached = 1,
+    WaypointReached = 2,
     WaypointSkip = 0,
     AgentRadius = 2,
     AgentHeight = 6,
