@@ -8,7 +8,7 @@ local CONFIG = {
     AttackCooldown = 0.5,
     LoopDelay = 0.03,
     
-    ApproachRepathThreshold = 5,
+    ApproachRepathThreshold = 1,
     
     -- Kite ring
     KiteMinRadius = 1,
@@ -20,7 +20,7 @@ local CONFIG = {
     KitePathCheckMax = 9999,
     
     -- Pathfinding
-    WaypointReached = 2,
+    WaypointReached = 5,
     WaypointSkip = 0,
     AgentRadius = 2,
     AgentHeight = 6,
