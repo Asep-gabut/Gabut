@@ -17,10 +17,10 @@ local CONFIG = {
     KiteAnglesPerRing = 30,
     
     -- Kite pathfinding validation
-    KitePathCheckMax = 5,
+    KitePathCheckMax = 3,
     
     -- Pathfinding
-    WaypointReached = 3,
+    WaypointReached = 2,
     WaypointSkip = 0,
     AgentRadius = 2,
     AgentHeight = 6,
