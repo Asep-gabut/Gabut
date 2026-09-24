@@ -19,7 +19,7 @@ local SignalEvent = ReplicatedStorage
 	:WaitForChild("Event")
 
 ------------------------------------------------------------
--- // ATTACK — Combo 1→2→3→4→5
+-- // ATTACK — Combo 1→2→3→4
 ------------------------------------------------------------
 local COMBO = {
 	{ slot = 1, press = true,  delay = 0.038000000000000006, arg6 = false },
@@ -55,7 +55,7 @@ end
 -- // CONFIG
 ------------------------------------------------------------
 local Config = {
-	BehindDistance = 4,
+	AboveHeight    = 5,     -- stud di atas kepala musuh
 	FollowInterval = 0.05,
 	AttackInterval = 0.15,
 }
@@ -95,17 +95,22 @@ local function getEnemyPart(enemy)
 		or enemy:FindFirstChildWhichIsA("BasePart")
 end
 
-local function getBehindCFrame(enemy)
+-- Posisi DI ATAS musuh, hadap ke bawah
+local function getAboveCFrame(enemy)
 	local tp = getEnemyPart(enemy)
 	if not tp then return nil end
 
 	local enemyCF = tp.CFrame
-	local behindPos = enemyCF.Position - enemyCF.LookVector * Config.BehindDistance
+	local abovePos = Vector3.new(
+		enemyCF.Position.X,
+		enemyCF.Position.Y + Config.AboveHeight,
+		enemyCF.Position.Z
+	)
 
-	local targetPos = Vector3.new(behindPos.X, enemyCF.Position.Y, behindPos.Z)
+	-- Hadap ke bawah (lihat ke posisi musuh)
 	local lookAtPos = Vector3.new(enemyCF.Position.X, enemyCF.Position.Y, enemyCF.Position.Z)
 
-	return CFrame.new(targetPos, lookAtPos)
+	return CFrame.new(abovePos, lookAtPos)
 end
 
 local function findAllEnemiesWithName()
@@ -129,7 +134,7 @@ local function findAllEnemiesWithName()
 end
 
 ------------------------------------------------------------
--- // FOLLOW LOOP — Set CFrame langsung (no tween, no anchor)
+-- // FOLLOW LOOP — Set CFrame ke ATAS musuh
 ------------------------------------------------------------
 local function startFollow()
 	if followThread then
@@ -145,7 +150,7 @@ local function startFollow()
 			end
 
 			if currentEnemy and currentEnemy.Parent and isEnemyAlive(currentEnemy) then
-				local targetCF = getBehindCFrame(currentEnemy)
+				local targetCF = getAboveCFrame(currentEnemy)
 				if targetCF then
 					hrp.CFrame = targetCF
 				end
@@ -374,13 +379,13 @@ HuntToggle = tab:CreateToggle({
 tab:CreateSection("Settings")
 
 tab:CreateSlider({
-	name = "Behind Distance",
+	name = "Above Height",
 	range = { 1, 15 },
 	increment = 0.5,
-	value = Config.BehindDistance,
+	value = Config.AboveHeight,
 	suffix = " stud",
 	callback = function(value)
-		Config.BehindDistance = value
+		Config.AboveHeight = value
 	end,
 })
 
@@ -413,7 +418,7 @@ tab:CreateSection("Info")
 
 tab:CreateParagraph({
 	title = "Cara Pakai",
-	content = "1. Pilih Area\n2. Pilih Nama Enemy\n3. Nyalain 'Farm Enemy'\n\nFollow: set CFrame langsung (no tween, no anchor)\nAttack: combo 1→2→3→4→5",
+	content = "1. Pilih Area\n2. Pilih Nama Enemy\n3. Nyalain 'Farm Enemy'\n\nFollow: CFrame ke ATAS musuh\nAttack: combo 1→2→3→4",
 })
 
 ------------------------------------------------------------
