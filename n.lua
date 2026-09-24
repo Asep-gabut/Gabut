@@ -24,10 +24,13 @@ local activeTween = nil
 local isHolding = false
 local isHunting = false
 
--- // Setting
-local BEHIND_DISTANCE = 3.2
-local FOLLOW_INTERVAL = 0.12
-local FOLLOW_MIN_DIST = 0.2
+-- // CONFIG (bisa diubah lewat UI)
+local Config = {
+	BehindDistance = 4,
+	FollowInterval = 0.12,
+	FollowMinDist  = 0.2,
+	ApproachSpeed  = 70,
+}
 
 local function getCharacter()
 	local char = player.Character
@@ -74,7 +77,7 @@ local function getBehindCFrame(enemy)
 	if not tp then return nil end
 
 	local enemyCF = tp.CFrame
-	local behindPos = enemyCF.Position - enemyCF.LookVector * BEHIND_DISTANCE
+	local behindPos = enemyCF.Position - enemyCF.LookVector * Config.BehindDistance
 
 	local targetPos = Vector3.new(behindPos.X, enemyCF.Position.Y, behindPos.Z)
 	local lookAtPos = Vector3.new(enemyCF.Position.X, enemyCF.Position.Y, enemyCF.Position.Z)
@@ -122,14 +125,14 @@ local function startFollow()
 				local targetCF = getBehindCFrame(currentEnemy)
 				if targetCF then
 					local dist = (hrp.Position - targetCF.Position).Magnitude
-					if dist > FOLLOW_MIN_DIST then
+					if dist > Config.FollowMinDist then
 						hrp.Anchored = true
 						if activeTween then
 							pcall(function() activeTween:Cancel() end)
 						end
 						local mt = TweenService:Create(
 							hrp,
-							TweenInfo.new(FOLLOW_INTERVAL, Enum.EasingStyle.Linear),
+							TweenInfo.new(Config.FollowInterval, Enum.EasingStyle.Linear),
 							{CFrame = targetCF}
 						)
 						activeTween = mt
@@ -140,7 +143,7 @@ local function startFollow()
 				end
 			end
 
-			task.wait(FOLLOW_INTERVAL)
+			task.wait(Config.FollowInterval)
 		end
 	end)
 end
@@ -161,7 +164,7 @@ local function approachEnemy(enemy)
 	hum:MoveTo(hrp.Position)
 
 	local dist = (hrp.Position - targetCF.Position).Magnitude
-	local duration = math.max(dist / 70, 0.1)
+	local duration = math.max(dist / Config.ApproachSpeed, 0.1)
 
 	hrp.Anchored = true
 	local tw = TweenService:Create(
@@ -213,7 +216,7 @@ local function startHunting()
 			if not closest then task.wait(0.3); continue end
 			currentEnemy = closest
 
-			if closestDist > BEHIND_DISTANCE + 4 then
+			if closestDist > Config.BehindDistance + 4 then
 				approachEnemy(closest)
 			end
 
@@ -309,21 +312,14 @@ local function buildEnemyList()
 end
 
 ------------------------------------------------------------
--- // Declare toggle dulu
+-- // TARGET SECTION
 ------------------------------------------------------------
+tab:CreateSection("Target")
+
+local EnemyDropdown
 local HuntToggle
 
-local function setToggle(value)
-	if not HuntToggle then return end
-	pcall(function() HuntToggle:Set(value) end)
-end
-
-------------------------------------------------------------
--- // Dropdowns
-------------------------------------------------------------
-local EnemyDropdown
-
-local AreaDropdown = tab:CreateDropdown({
+tab:CreateDropdown({
 	name = "Area",
 	options = getAreaNames(),
 	callback = function(opt)
@@ -336,10 +332,13 @@ local AreaDropdown = tab:CreateDropdown({
 			return
 		end
 
+		if isHunting then
+			stopAll()
+			if HuntToggle then pcall(function() HuntToggle:Set(false) end) end
+		end
+
 		selectedArea = area
 		targetEnemyName = nil
-		stopAll()
-		setToggle(false)
 
 		local list = buildEnemyList()
 		if EnemyDropdown then
@@ -363,38 +362,32 @@ EnemyDropdown = tab:CreateDropdown({
 		local name = string.match(val, "^(.-)%s+%(%d+%)$") or val
 		targetEnemyName = name
 
-		if not selectedArea then
-			window:Notify({ title = "Pilih area dulu", content = "Belum ada area." })
-			return
-		end
-
-		stopAll()
-		isHunting = true
-		startFollow()
-		startHunting()
-		setToggle(true)
-
-		window:Notify({ title = "Hunting", content = "Target: " .. name })
+		window:Notify({
+			title = "Target",
+			content = name .. " • nyalain Farm buat mulai",
+		})
 	end,
 })
 
 ------------------------------------------------------------
--- // Toggle Hunt (format sesuai contoh lu)
+-- // FARM SECTION
 ------------------------------------------------------------
+tab:CreateSection("Farm")
+
 HuntToggle = tab:CreateToggle({
-	name = "Hunt",
-	flag = "AutoHunt",
+	name = "Farm Enemy",
+	flag = "FarmEnemy",
 	value = false,
 	callback = function(value)
 		if value then
 			if not selectedArea then
 				window:Notify({ title = "Pilih area dulu", content = "Belum ada area." })
-				setToggle(false)
+				HuntToggle:Set(false)
 				return
 			end
 			if not targetEnemyName then
 				window:Notify({ title = "Pilih enemy dulu", content = "Belum ada target." })
-				setToggle(false)
+				HuntToggle:Set(false)
 				return
 			end
 
@@ -402,31 +395,80 @@ HuntToggle = tab:CreateToggle({
 			isHunting = true
 			startFollow()
 			startHunting()
-			window:Notify({ title = "Hunting", content = "Target: " .. targetEnemyName })
+			window:Notify({ title = "Farm Started", content = "Target: " .. targetEnemyName })
 		else
 			stopAll()
-			window:Notify({ title = "Stopped", content = "Hunting dihentikan." })
+			window:Notify({ title = "Farm Stopped", content = "Hunting dihentikan." })
 		end
 	end,
 })
 
 ------------------------------------------------------------
--- // Info
+-- // SETTINGS SECTION — pakai format slider lu
 ------------------------------------------------------------
-tab:CreateParagraph({
-	title = "Cara Pakai",
-	content = "1. Pilih Area\n2. Pilih Nama Enemy → toggle auto ON & mulai hunting\n3. Matiin toggle buat stop\n\nTween: belakang musuh, Y ngikut musuh\nAttack: hold left click",
+tab:CreateSection("Settings")
+
+tab:CreateSlider({
+	name = "Behind Distance",
+	range = { 1, 15 },
+	increment = 0.5,
+	value = Config.BehindDistance,
+	suffix = " stud",
+	callback = function(value)
+		Config.BehindDistance = value
+	end,
+})
+
+tab:CreateSlider({
+	name = "Follow Interval",
+	range = { 0.05, 0.5 },
+	increment = 0.01,
+	value = Config.FollowInterval,
+	suffix = "s",
+	callback = function(value)
+		Config.FollowInterval = value
+	end,
+})
+
+tab:CreateSlider({
+	name = "Follow Min Distance",
+	range = { 0.05, 2 },
+	increment = 0.05,
+	value = Config.FollowMinDist,
+	suffix = " stud",
+	callback = function(value)
+		Config.FollowMinDist = value
+	end,
+})
+
+tab:CreateSlider({
+	name = "Approach Speed",
+	range = { 20, 200 },
+	increment = 5,
+	value = Config.ApproachSpeed,
+	suffix = " stud/s",
+	callback = function(value)
+		Config.ApproachSpeed = value
+	end,
 })
 
 ------------------------------------------------------------
--- // Auto-refresh list tiap 5s
+-- // INFO
+------------------------------------------------------------
+tab:CreateSection("Info")
+
+tab:CreateParagraph({
+	title = "Cara Pakai",
+	content = "1. Pilih Area\n2. Pilih Nama Enemy\n3. Nyalain 'Farm Enemy' → mulai\n4. Matiin toggle → stop\n\nAtur kecepatan & jarak di section Settings.",
+})
+
+------------------------------------------------------------
+-- // Auto-refresh enemy list
 ------------------------------------------------------------
 task.spawn(function()
 	while true do
 		task.wait(5)
-		pcall(function() AreaDropdown:Refresh(getAreaNames()) end)
-
-		if selectedArea and not isHunting then
+		if not isHunting and selectedArea then
 			pcall(function() EnemyDropdown:Refresh(buildEnemyList()) end)
 		end
 	end
