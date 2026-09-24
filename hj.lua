@@ -21,7 +21,7 @@ local CONFIG = {
     
     -- Pathfinding
     WaypointReached = 3,
-    WaypointSkip = 2,
+    WaypointSkip = 1,
     AgentRadius = 2,
     AgentHeight = 6,
     AgentCanJump = true,
