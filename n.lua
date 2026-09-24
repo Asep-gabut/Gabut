@@ -19,20 +19,20 @@ local SignalEvent = ReplicatedStorage
 	:WaitForChild("Event")
 
 ------------------------------------------------------------
--- // ATTACK — Combo 1→2→3→4
+-- // ATTACK — Combo "Regular Katana" 1→2→3→4→5
 ------------------------------------------------------------
 local COMBO = {
-	{ slot = 1, press = true,  delay = 0.038000000000000006, arg6 = false },
-	{ slot = 2, press = false, delay = 0,                    arg6 = false },
-	{ slot = 3, press = false, delay = 0,                    arg6 = false },
-	{ slot = 4, press = false, delay = 0,                    arg6 = false },
-	{ slot = 5, press = false, delay = 0.14999999999999997,  arg6 = false },
+	{ action = "Regular Katana", slot = 1, press = true,  delay = 0.09300000000000003, arg6 = false },
+	{ action = "Regular Katana", slot = 2, press = false, delay = 0.06500000000000003, arg6 = false },
+	{ action = "Regular Katana", slot = 3, press = false, delay = 0.06500000000000003, arg6 = false },
+	{ action = "Regular Katana", slot = 4, press = false, delay = 0.1,                 arg6 = false },
+	{ action = "Regular Katana", slot = 5, press = false, delay = 0.07500000000000001, arg6 = false },
 }
 
 local function attackFire(entry)
 	local args = {
 		"Combat_Service",
-		"Combat",
+		entry.action,
 		entry.slot,
 		entry.press,
 		entry.delay,
@@ -56,7 +56,7 @@ end
 -- // CONFIG
 ------------------------------------------------------------
 local Config = {
-	AboveHeight    = 5,     -- stud di atas kepala musuh
+	AboveHeight    = 5,
 	FollowInterval = 0.05,
 	AttackInterval = 0.15,
 }
@@ -96,7 +96,7 @@ local function getEnemyPart(enemy)
 		or enemy:FindFirstChildWhichIsA("BasePart")
 end
 
--- Posisi DI ATAS musuh, hadap ke bawah
+-- Posisi DI ATAS musuh
 local function getAboveCFrame(enemy)
 	local tp = getEnemyPart(enemy)
 	if not tp then return nil end
@@ -107,8 +107,6 @@ local function getAboveCFrame(enemy)
 		enemyCF.Position.Y + Config.AboveHeight,
 		enemyCF.Position.Z
 	)
-
-	-- Hadap ke bawah (lihat ke posisi musuh)
 	local lookAtPos = Vector3.new(enemyCF.Position.X, enemyCF.Position.Y, enemyCF.Position.Z)
 
 	return CFrame.new(abovePos, lookAtPos)
@@ -135,7 +133,7 @@ local function findAllEnemiesWithName()
 end
 
 ------------------------------------------------------------
--- // FOLLOW LOOP — Set CFrame ke ATAS musuh
+-- // FOLLOW LOOP
 ------------------------------------------------------------
 local function startFollow()
 	if followThread then
@@ -419,7 +417,7 @@ tab:CreateSection("Info")
 
 tab:CreateParagraph({
 	title = "Cara Pakai",
-	content = "1. Pilih Area\n2. Pilih Nama Enemy\n3. Nyalain 'Farm Enemy'\n\nFollow: CFrame ke ATAS musuh\nAttack: combo 1→2→3→4",
+	content = "1. Pilih Area\n2. Pilih Nama Enemy\n3. Nyalain 'Farm Enemy'\n\nFollow: CFrame ke ATAS musuh\nAttack: combo Regular Katana 1→2→3→4→5",
 })
 
 ------------------------------------------------------------
