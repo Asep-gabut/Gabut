@@ -1,20 +1,24 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v66                    ║
+-- ║   AUTO FARM KAITUN v68                    ║
 -- ║   Tanpa walkspeed modifier                ║
 -- ║   Kite ring 50-100 stud                   ║
--- ║   MaxAttackDistance = KeepDistance        ║
+-- ║   MaxAttack = KeepDistance (45)           ║
+-- ║   Approach repath cuma kalau enemy gerak  ║
 -- ╚══════════════════════════════════════════╝
 
 local CONFIG = {
-    KeepDistance = 45,       -- jarak approach & max attack distance (digabung)
+    KeepDistance = 45,
     AttackCooldown = 0.5,
     LoopDelay = 0.03,
     
+    -- Approach: recompute path hanya kalau enemy geser > threshold
+    ApproachRepathThreshold = 5,
+    
     -- Kite ring
-    KiteMinRadius = 50,
-    KiteMaxRadius = 100,
-    KiteRadiusStep = 10,
-    KiteAnglesPerRing = 20,
+    KiteMinRadius = 1,
+    KiteMaxRadius = 20,
+    KiteRadiusStep = 2,
+    KiteAnglesPerRing = 30,
     
     -- Pathfinding
     WaypointReached = 3,
@@ -60,6 +64,7 @@ local State = {
     PathWaypoints = nil, PathIndex = 1, PathTargetPos = nil,
     PathGoalType = nil,
     PathRequestId = 0,
+    LastApproachEnemyPos = nil,
     LockedEnemyPos = nil, ShiftlockSaved = nil,
 }
 
@@ -539,6 +544,7 @@ local function resetPath()
     State.PathIndex = 1
     State.PathTargetPos = nil
     State.PathGoalType = nil
+    State.LastApproachEnemyPos = nil
 end
 
 local function requestPath(targetPos, goalType)
@@ -648,6 +654,38 @@ local function attackEnemy(enemy)
     return true
 end
 
+-- ⭐ APPROACH - repath cuma kalau:
+--   1. Belum ada path
+--   2. Goal sebelumnya bukan approach
+--   3. Belum nyatet posisi enemy
+--   4. Path udah abis dilalui (biar nggak stuck)
+--   5. Enemy geser ≥ threshold dari posisi terakhir repath
+local function approachEnemy(enemyPos)
+    local needRepath = false
+    
+    if not State.PathWaypoints then
+        needRepath = true
+    elseif State.PathGoalType ~= "approach" then
+        needRepath = true
+    elseif not State.LastApproachEnemyPos then
+        needRepath = true
+    elseif State.PathIndex > #State.PathWaypoints then
+        needRepath = true
+    else
+        local moved = (enemyPos - State.LastApproachEnemyPos).Magnitude
+        if moved >= CONFIG.ApproachRepathThreshold then
+            needRepath = true
+        end
+    end
+    
+    if needRepath then
+        State.LastApproachEnemyPos = enemyPos
+        requestPath(enemyPos, "approach")
+    end
+    
+    followPath()
+end
+
 local function mainLoop()
     while State.Running do
         task.wait(CONFIG.LoopDelay)
@@ -671,16 +709,14 @@ local function mainLoop()
                 
                 State.LockedEnemyPos = enemyPos
                 
-                -- ⭐ MaxAttackDistance = KeepDistance (digabung)
-                -- Attack cuma kalau jarak <= KeepDistance
+                -- Attack cuma kalau dalam jangkauan (dist <= 45)
                 if dist <= CONFIG.KeepDistance then
                     attackEnemy(enemy)
                 end
                 
                 if dist > CONFIG.KeepDistance then
-                    -- APPROACH: jarak > 45, dekati pakai pathfinding (tanpa attack)
-                    requestPath(enemyPos, "approach")
-                    followPath()
+                    -- APPROACH: repath cuma kalau enemy gerak / path abis
+                    approachEnemy(enemyPos)
                     
                     setStatus(
                         string.format("Approaching (%.1f) | %d enemy | wp %d/%d", 
@@ -689,7 +725,7 @@ local function mainLoop()
                         Color3.fromRGB(100, 180, 255)
                     )
                 else
-                    -- KITE: jarak <= 45, kabur ke ring 50-100 stud (sambil attack)
+                    -- KITE: kabur ke ring 50-100 stud
                     local safePoint = findSafePointAroundPlayer(enemyPos, myPos)
                     if safePoint then
                         requestPath(safePoint, "retreat")
@@ -717,10 +753,11 @@ task.spawn(function()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v66 - LOADED    ║")
+    print("║   AUTO FARM KAITUN v68 - LOADED    ║")
     print("║   Tanpa walkspeed modifier         ║")
     print("║   Kite ring 50-100 stud            ║")
     print("║   MaxAttack = KeepDistance (45)    ║")
+    print("║   Approach repath kalau enemy gerak║")
     print("╚════════════════════════════════════╝")
     
     setStatus("Starting...", Color3.fromRGB(255, 220, 100))
