@@ -20,10 +20,14 @@ local SignalEvent = ReplicatedStorage
 	:WaitForChild("Event")
 
 ------------------------------------------------------------
--- // ATTACK — Combo 5→4→3→2→1
+-- // ATTACK — Combo 1→2→3→4→5
 ------------------------------------------------------------
 local COMBO = {
-	{ slot = 5, press = false, delay = 0.15,  arg6 = false }
+	{ slot = 1, press = true,  delay = 0.038000000000000006, arg6 = false },
+	{ slot = 2, press = false, delay = 0,                    arg6 = false },
+	{ slot = 3, press = false, delay = 0,                    arg6 = false },
+	{ slot = 4, press = false, delay = 0,                    arg6 = false },
+	{ slot = 5, press = false, delay = 0.14999999999999997,  arg6 = false },
 }
 
 local function attackFire(entry)
@@ -204,7 +208,7 @@ local function approachEnemy(enemy)
 end
 
 ------------------------------------------------------------
--- // KILL LOOP — Combo
+-- // KILL LOOP
 ------------------------------------------------------------
 local function startHunting()
 	if killThread then
@@ -243,7 +247,6 @@ local function startHunting()
 				approachEnemy(closest)
 			end
 
-			-- Combo 5→4→3→2→1
 			while isEnemyAlive(closest) and isHunting and targetEnemyName do
 				attackCombo()
 				task.wait(Config.AttackInterval)
@@ -491,7 +494,7 @@ tab:CreateSection("Info")
 
 tab:CreateParagraph({
 	title = "Cara Pakai",
-	content = "1. Pilih Area\n2. Pilih Nama Enemy\n3. Nyalain 'Farm Enemy'\n\nAttack: combo 5→4→3→2→1\n(tiap combo fire 5x sekaligus)",
+	content = "1. Pilih Area\n2. Pilih Nama Enemy\n3. Nyalain 'Farm Enemy'\n\nAttack: combo 1→2→3→4→5",
 })
 
 ------------------------------------------------------------
