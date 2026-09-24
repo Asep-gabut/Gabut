@@ -25,7 +25,7 @@ local isHolding = false
 local isHunting = false
 
 -- // Setting
-local BEHIND_DISTANCE = 4
+local BEHIND_DISTANCE = 3.2
 local FOLLOW_INTERVAL = 0.12
 local FOLLOW_MIN_DIST = 0.2
 
