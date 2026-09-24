@@ -20,9 +20,9 @@ local SignalEvent = ReplicatedStorage
 	:WaitForChild("Event")
 
 ------------------------------------------------------------
--- // ATTACK (HARDCODED — cuma method & slot)
+-- // ATTACK (CYCLE 1→5)
 ------------------------------------------------------------
-local ATTACK_SLOTS = { 1, 2, 3, 4, 5 }  -- slot yang di-fire
+local currentSlot = 1
 
 local function attackFire(slot)
 	local args = {
@@ -30,7 +30,7 @@ local function attackFire(slot)
 		"Combat",
 		slot,
 		true,
-		0.038000000000000006,
+		6,
 		false
 	}
 	local ok, err = pcall(function()
@@ -41,14 +41,14 @@ local function attackFire(slot)
 	end
 end
 
-local function attackAll()
-	for _, slot in ipairs(ATTACK_SLOTS) do
-		attackFire(slot)
-	end
+local function attackCycle()
+	attackFire(currentSlot)
+	currentSlot = currentSlot + 1
+	if currentSlot > 5 then currentSlot = 1 end
 end
 
 ------------------------------------------------------------
--- // CONFIG (semua bisa diubah lewat UI)
+-- // CONFIG
 ------------------------------------------------------------
 local Config = {
 	BehindDistance = 4,
@@ -202,7 +202,7 @@ local function approachEnemy(enemy)
 end
 
 ------------------------------------------------------------
--- // KILL LOOP
+-- // KILL LOOP — cycle attack
 ------------------------------------------------------------
 local function startHunting()
 	if killThread then
@@ -241,9 +241,9 @@ local function startHunting()
 				approachEnemy(closest)
 			end
 
-			-- Fire slot 1-5, interval dari Config
+			-- Cycle fire 1→2→3→4→5→1...
 			while isEnemyAlive(closest) and isHunting and targetEnemyName do
-				attackAll()
+				attackCycle()
 				task.wait(Config.AttackInterval)
 			end
 
@@ -257,6 +257,7 @@ end
 ------------------------------------------------------------
 local function stopAll()
 	isHunting = false
+	currentSlot = 1  -- reset cycle
 	if followThread then
 		pcall(function() task.cancel(followThread) end)
 		followThread = nil
@@ -423,7 +424,7 @@ HuntToggle = tab:CreateToggle({
 })
 
 ------------------------------------------------------------
--- // SETTINGS SECTION (semua slider)
+-- // SETTINGS SECTION
 ------------------------------------------------------------
 tab:CreateSection("Settings")
 
@@ -489,7 +490,7 @@ tab:CreateSection("Info")
 
 tab:CreateParagraph({
 	title = "Cara Pakai",
-	content = "1. Pilih Area\n2. Pilih Nama Enemy\n3. Nyalain 'Farm Enemy'\n4. Atur tuning di section Settings\n\nAttack: fire slot 1-5 (hardcoded)",
+	content = "1. Pilih Area\n2. Pilih Nama Enemy\n3. Nyalain 'Farm Enemy'\n4. Atur tuning di section Settings\n\nAttack: cycle 1→2→3→4→5→1...",
 })
 
 ------------------------------------------------------------
