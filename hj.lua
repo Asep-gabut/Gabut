@@ -9,7 +9,7 @@
 local CONFIG = {
     KeepDistance = 45,
     AttackCooldown = 0.5,
-    LoopDelay = 0.01,
+    LoopDelay = 0.05,
     
     -- Approach: recompute path hanya kalau enemy geser > threshold
     ApproachRepathThreshold = 5,
