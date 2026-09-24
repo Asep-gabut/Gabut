@@ -17,11 +17,11 @@ local currentEnemy = nil
 local followThread = nil
 local killThread = nil
 local activeTween = nil
+local isHolding = false
 
 -- // Setting
-local BEHIND_DISTANCE = 4         -- jarak di belakang musuh
-local FOLLOW_INTERVAL = 0.01      -- makin kecil makin nempel
-local ATTACK_INTERVAL = 0.03
+local BEHIND_DISTANCE = 4
+local FOLLOW_INTERVAL = 0.12
 local FOLLOW_MIN_DIST = 0.2
 
 local function getCharacter()
@@ -34,11 +34,17 @@ local function getCharacter()
 end
 
 ------------------------------------------------------------
--- // ATTACK — VirtualInputManager left click
+-- // ATTACK — HOLD left click
 ------------------------------------------------------------
-local function attackClick()
+local function attackHoldStart()
+	if isHolding then return end
+	isHolding = true
 	VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
-	task.wait(0.02)
+end
+
+local function attackHoldStop()
+	if not isHolding then return end
+	isHolding = false
 	VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
 end
 
@@ -259,22 +265,21 @@ local function getEnemyPart(enemy)
 		or enemy:FindFirstChildWhichIsA("BasePart")
 end
 
--- Hitung CFrame di BELAKANG musuh, hadap ke musuh
+-- ✅ FIX Y: pakai posisi Y MUSUH, bukan player
 local function getBehindCFrame(enemy)
 	local tp = getEnemyPart(enemy)
 	if not tp then return nil end
 
 	local enemyCF = tp.CFrame
-	-- LookVector = arah hadap musuh → belakang = -LookVector
+
+	-- Posisi di belakang musuh
 	local behindPos = enemyCF.Position - enemyCF.LookVector * BEHIND_DISTANCE
 
-	-- Posisi character harus sejajar tinggi dengan musuh (biar gak naik/turun)
-	local myChar, myHum, myHrp = getCharacter()
-	local yPos = myHrp and myHrp.Position.Y or behindPos.Y
+	-- ⚠️ Y = posisi Y MUSUH (biar sejajar)
+	local targetPos = Vector3.new(behindPos.X, enemyCF.Position.Y, behindPos.Z)
 
 	-- Hadap ke musuh (dari belakang ngadep depan)
-	local lookAtPos = Vector3.new(enemyCF.Position.X, yPos, enemyCF.Position.Z)
-	local targetPos = Vector3.new(behindPos.X, yPos, behindPos.Z)
+	local lookAtPos = Vector3.new(enemyCF.Position.X, enemyCF.Position.Y, enemyCF.Position.Z)
 
 	return CFrame.new(targetPos, lookAtPos)
 end
@@ -300,7 +305,7 @@ local function findAllEnemiesWithName()
 end
 
 ------------------------------------------------------------
--- // FOLLOW LOOP — nempel di BELAKANG musuh
+-- // FOLLOW LOOP
 ------------------------------------------------------------
 local function startFollow()
 	if followThread then
@@ -318,8 +323,7 @@ local function startFollow()
 			if currentEnemy and currentEnemy.Parent and isEnemyAlive(currentEnemy) then
 				local targetCF = getBehindCFrame(currentEnemy)
 				if targetCF then
-					local targetPos = targetCF.Position
-					local dist = (hrp.Position - targetPos).Magnitude
+					local dist = (hrp.Position - targetCF.Position).Magnitude
 					if dist > FOLLOW_MIN_DIST then
 						hrp.Anchored = true
 						if activeTween then
@@ -332,9 +336,8 @@ local function startFollow()
 						)
 						activeTween = mt
 						mt:Play()
-						-- Gak Wait, biar loop tetap cepat
 					else
-						-- Udah deket, cuma update rotasi biar tetap hadap musuh
+						-- Udah deket, cuma update rotasi & Y biar presisi
 						hrp.CFrame = targetCF
 					end
 				end
@@ -346,7 +349,7 @@ local function startFollow()
 end
 
 ------------------------------------------------------------
--- // Approach awal (tween ke belakang)
+-- // Approach awal
 ------------------------------------------------------------
 local function approachEnemy(enemy)
 	local char, hum, hrp = getCharacter()
@@ -377,7 +380,7 @@ local function approachEnemy(enemy)
 end
 
 ------------------------------------------------------------
--- // KILL LOOP
+-- // KILL LOOP — hold click selama ada target
 ------------------------------------------------------------
 local function startHunting()
 	if killThread then
@@ -390,6 +393,7 @@ local function startHunting()
 
 			if #list == 0 then
 				currentEnemy = nil
+				attackHoldStop()   -- stop hold kalau gak ada target
 				status.Text = "⏳ Nunggu " .. targetEnemyName .. " spawn..."
 				task.wait(1)
 				continue
@@ -419,10 +423,17 @@ local function startHunting()
 				approachEnemy(closest)
 			end
 
+			-- 🔥 HOLD left click selama musuh masih hidup
+			attackHoldStart()
+
+			-- Tunggu sampai musuh mati (cek tiap 0.15s)
 			while isEnemyAlive(closest) and targetEnemyName and selectedArea do
-				attackClick()
-				task.wait(ATTACK_INTERVAL)
+				task.wait(0.15)
 			end
+
+			-- Musuh mati → stop hold sebentar sebelum pindah target
+			attackHoldStop()
+			task.wait(0.1)
 
 			if closest and closest.Parent then
 				status.Text = "✅ " .. closest.Name .. " mati, lanjut..."
@@ -436,6 +447,7 @@ end
 -- // Stop
 ------------------------------------------------------------
 local function stopAll()
+	attackHoldStop()  -- ⚠️ WAJIB: lepas hold biar gak nyangkut
 	if followThread then
 		pcall(function() task.cancel(followThread) end)
 		followThread = nil
