@@ -69,7 +69,6 @@ local function getEnemyPart(enemy)
 		or enemy:FindFirstChildWhichIsA("BasePart")
 end
 
--- Posisi di BELAKANG musuh, Y ngikut musuh
 local function getBehindCFrame(enemy)
 	local tp = getEnemyPart(enemy)
 	if not tp then return nil end
@@ -310,6 +309,16 @@ local function buildEnemyList()
 end
 
 ------------------------------------------------------------
+-- // Declare toggle dulu
+------------------------------------------------------------
+local HuntToggle
+
+local function setToggle(value)
+	if not HuntToggle then return end
+	pcall(function() HuntToggle:Set(value) end)
+end
+
+------------------------------------------------------------
 -- // Dropdowns
 ------------------------------------------------------------
 local EnemyDropdown
@@ -330,6 +339,7 @@ local AreaDropdown = tab:CreateDropdown({
 		selectedArea = area
 		targetEnemyName = nil
 		stopAll()
+		setToggle(false)
 
 		local list = buildEnemyList()
 		if EnemyDropdown then
@@ -362,19 +372,41 @@ EnemyDropdown = tab:CreateDropdown({
 		isHunting = true
 		startFollow()
 		startHunting()
+		setToggle(true)
 
 		window:Notify({ title = "Hunting", content = "Target: " .. name })
 	end,
 })
 
 ------------------------------------------------------------
--- // Stop button
+-- // Toggle Hunt (format sesuai contoh lu)
 ------------------------------------------------------------
-tab:CreateButton({
-	name = "Stop Hunting",
-	callback = function()
-		stopAll()
-		window:Notify({ title = "Stopped", content = "Hunting dihentikan." })
+HuntToggle = tab:CreateToggle({
+	name = "Hunt",
+	flag = "AutoHunt",
+	value = false,
+	callback = function(value)
+		if value then
+			if not selectedArea then
+				window:Notify({ title = "Pilih area dulu", content = "Belum ada area." })
+				setToggle(false)
+				return
+			end
+			if not targetEnemyName then
+				window:Notify({ title = "Pilih enemy dulu", content = "Belum ada target." })
+				setToggle(false)
+				return
+			end
+
+			stopAll()
+			isHunting = true
+			startFollow()
+			startHunting()
+			window:Notify({ title = "Hunting", content = "Target: " .. targetEnemyName })
+		else
+			stopAll()
+			window:Notify({ title = "Stopped", content = "Hunting dihentikan." })
+		end
 	end,
 })
 
@@ -383,7 +415,7 @@ tab:CreateButton({
 ------------------------------------------------------------
 tab:CreateParagraph({
 	title = "Cara Pakai",
-	content = "1. Pilih Area\n2. Pilih Nama Enemy → auto hunting\n3. Klik Stop buat berhenti\n\nTween: belakang musuh, Y ngikut musuh\nAttack: hold left click",
+	content = "1. Pilih Area\n2. Pilih Nama Enemy → toggle auto ON & mulai hunting\n3. Matiin toggle buat stop\n\nTween: belakang musuh, Y ngikut musuh\nAttack: hold left click",
 })
 
 ------------------------------------------------------------
