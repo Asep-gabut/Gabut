@@ -58,9 +58,7 @@ end
 ------------------------------------------------------------
 local Config = {
 	BehindDistance = 4,
-	FollowInterval = 0.12,
-	FollowMinDist  = 0.2,
-	ApproachSpeed  = 70,
+	FollowInterval = 0.1,
 	AttackInterval = 0.15,
 }
 
@@ -134,7 +132,7 @@ local function findAllEnemiesWithName()
 end
 
 ------------------------------------------------------------
--- // FOLLOW LOOP
+-- // FOLLOW LOOP — tween tiap interval
 ------------------------------------------------------------
 local function startFollow()
 	if followThread then
@@ -152,59 +150,27 @@ local function startFollow()
 			if currentEnemy and currentEnemy.Parent and isEnemyAlive(currentEnemy) then
 				local targetCF = getBehindCFrame(currentEnemy)
 				if targetCF then
-					local dist = (hrp.Position - targetCF.Position).Magnitude
-					if dist > Config.FollowMinDist then
-						hrp.Anchored = true
-						if activeTween then
-							pcall(function() activeTween:Cancel() end)
-						end
-						local mt = TweenService:Create(
-							hrp,
-							TweenInfo.new(Config.FollowInterval, Enum.EasingStyle.Linear),
-							{CFrame = targetCF}
-						)
-						activeTween = mt
-						mt:Play()
-					else
-						hrp.CFrame = targetCF
+					hrp.Anchored = true
+
+					-- Cancel tween lama biar gak numpuk
+					if activeTween then
+						pcall(function() activeTween:Cancel() end)
 					end
+
+					-- Tween baru ke posisi terbaru
+					local tw = TweenService:Create(
+						hrp,
+						TweenInfo.new(Config.FollowInterval, Enum.EasingStyle.Linear),
+						{CFrame = targetCF}
+					)
+					activeTween = tw
+					tw:Play()
 				end
 			end
 
 			task.wait(Config.FollowInterval)
 		end
 	end)
-end
-
-------------------------------------------------------------
--- // Approach awal
-------------------------------------------------------------
-local function approachEnemy(enemy)
-	local char, hum, hrp = getCharacter()
-	local targetCF = getBehindCFrame(enemy)
-	if not char or not targetCF then return false end
-
-	if activeTween then
-		pcall(function() activeTween:Cancel() end)
-		activeTween = nil
-	end
-
-	hum:MoveTo(hrp.Position)
-
-	local dist = (hrp.Position - targetCF.Position).Magnitude
-	local duration = math.max(dist / Config.ApproachSpeed, 0.1)
-
-	hrp.Anchored = true
-	local tw = TweenService:Create(
-		hrp,
-		TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-		{CFrame = targetCF}
-	)
-	activeTween = tw
-	tw:Play()
-	tw.Completed:Wait()
-	if activeTween == tw then activeTween = nil end
-	return true
 end
 
 ------------------------------------------------------------
@@ -243,10 +209,7 @@ local function startHunting()
 			if not closest then task.wait(0.3); continue end
 			currentEnemy = closest
 
-			if closestDist > Config.BehindDistance + 4 then
-				approachEnemy(closest)
-			end
-
+			-- Attack combo
 			while isEnemyAlive(closest) and isHunting and targetEnemyName do
 				attackCombo()
 				task.wait(Config.AttackInterval)
@@ -262,6 +225,7 @@ end
 ------------------------------------------------------------
 local function stopAll()
 	isHunting = false
+
 	if followThread then
 		pcall(function() task.cancel(followThread) end)
 		followThread = nil
@@ -274,8 +238,10 @@ local function stopAll()
 		pcall(function() activeTween:Cancel() end)
 		activeTween = nil
 	end
+
 	local char, hum, hrp = getCharacter()
 	if hrp then hrp.Anchored = false end
+
 	currentEnemy = nil
 end
 
@@ -445,34 +411,12 @@ tab:CreateSlider({
 
 tab:CreateSlider({
 	name = "Follow Interval",
-	range = { 0.05, 0.5 },
+	range = { 0.03, 0.5 },
 	increment = 0.01,
 	value = Config.FollowInterval,
 	suffix = "s",
 	callback = function(value)
 		Config.FollowInterval = value
-	end,
-})
-
-tab:CreateSlider({
-	name = "Follow Min Distance",
-	range = { 0.05, 2 },
-	increment = 0.05,
-	value = Config.FollowMinDist,
-	suffix = " stud",
-	callback = function(value)
-		Config.FollowMinDist = value
-	end,
-})
-
-tab:CreateSlider({
-	name = "Approach Speed",
-	range = { 20, 200 },
-	increment = 5,
-	value = Config.ApproachSpeed,
-	suffix = " stud/s",
-	callback = function(value)
-		Config.ApproachSpeed = value
 	end,
 })
 
@@ -494,7 +438,7 @@ tab:CreateSection("Info")
 
 tab:CreateParagraph({
 	title = "Cara Pakai",
-	content = "1. Pilih Area\n2. Pilih Nama Enemy\n3. Nyalain 'Farm Enemy'\n\nAttack: combo 1→2→3→4→5",
+	content = "1. Pilih Area\n2. Pilih Nama Enemy\n3. Nyalain 'Farm Enemy'\n\nFollow: tween tiap interval\nAttack: combo 1→2→3→4→5",
 })
 
 ------------------------------------------------------------
