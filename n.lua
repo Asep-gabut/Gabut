@@ -132,7 +132,7 @@ local function findAllEnemiesWithName()
 end
 
 ------------------------------------------------------------
--- // FOLLOW LOOP — tween tiap interval
+-- // FOLLOW LOOP — TWEEN ONLY (no anchor, no anti-gravity)
 ------------------------------------------------------------
 local function startFollow()
 	if followThread then
@@ -150,14 +150,12 @@ local function startFollow()
 			if currentEnemy and currentEnemy.Parent and isEnemyAlive(currentEnemy) then
 				local targetCF = getBehindCFrame(currentEnemy)
 				if targetCF then
-					hrp.Anchored = true
-
 					-- Cancel tween lama biar gak numpuk
 					if activeTween then
 						pcall(function() activeTween:Cancel() end)
 					end
 
-					-- Tween baru ke posisi terbaru
+					-- Tween langsung, no anchor, no trick
 					local tw = TweenService:Create(
 						hrp,
 						TweenInfo.new(Config.FollowInterval, Enum.EasingStyle.Linear),
@@ -209,7 +207,6 @@ local function startHunting()
 			if not closest then task.wait(0.3); continue end
 			currentEnemy = closest
 
-			-- Attack combo
 			while isEnemyAlive(closest) and isHunting and targetEnemyName do
 				attackCombo()
 				task.wait(Config.AttackInterval)
@@ -238,9 +235,6 @@ local function stopAll()
 		pcall(function() activeTween:Cancel() end)
 		activeTween = nil
 	end
-
-	local char, hum, hrp = getCharacter()
-	if hrp then hrp.Anchored = false end
 
 	currentEnemy = nil
 end
@@ -438,7 +432,7 @@ tab:CreateSection("Info")
 
 tab:CreateParagraph({
 	title = "Cara Pakai",
-	content = "1. Pilih Area\n2. Pilih Nama Enemy\n3. Nyalain 'Farm Enemy'\n\nFollow: tween tiap interval\nAttack: combo 1→2→3→4→5",
+	content = "1. Pilih Area\n2. Pilih Nama Enemy\n3. Nyalain 'Farm Enemy'\n\nFollow: TWEEN ONLY (no anchor, no anti-gravity)\nAttack: combo 1→2→3→4→5",
 })
 
 ------------------------------------------------------------
