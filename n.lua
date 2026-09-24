@@ -1,3 +1,5 @@
+-- Set FPS cap ke 240
+setfpscap(15)
 -- // Rayfield Gen2
 getgenv().RAYFIELD_SECURE = true
 local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
