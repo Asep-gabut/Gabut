@@ -20,18 +20,20 @@ local SignalEvent = ReplicatedStorage
 	:WaitForChild("Event")
 
 ------------------------------------------------------------
--- // ATTACK (CYCLE 1→5)
+-- // ATTACK — Combo 5→4→3→2→1
 ------------------------------------------------------------
-local currentSlot = 1
+local COMBO = {
+	{ slot = 5, press = false, delay = 0.15,  arg6 = false }
+}
 
-local function attackFire(slot)
+local function attackFire(entry)
 	local args = {
 		"Combat_Service",
 		"Combat",
-		slot,
-		true,
-		0,
-		false
+		entry.slot,
+		entry.press,
+		entry.delay,
+		entry.arg6
 	}
 	local ok, err = pcall(function()
 		SignalEvent:FireServer(unpack(args))
@@ -41,10 +43,10 @@ local function attackFire(slot)
 	end
 end
 
-local function attackCycle()
-	attackFire(currentSlot)
-	currentSlot = currentSlot + 1
-	if currentSlot > 4 then currentSlot = 1 end
+local function attackCombo()
+	for _, entry in ipairs(COMBO) do
+		attackFire(entry)
+	end
 end
 
 ------------------------------------------------------------
@@ -202,7 +204,7 @@ local function approachEnemy(enemy)
 end
 
 ------------------------------------------------------------
--- // KILL LOOP — cycle attack
+-- // KILL LOOP — Combo
 ------------------------------------------------------------
 local function startHunting()
 	if killThread then
@@ -241,9 +243,9 @@ local function startHunting()
 				approachEnemy(closest)
 			end
 
-			-- Cycle fire 1→2→3→4→5→1...
+			-- Combo 5→4→3→2→1
 			while isEnemyAlive(closest) and isHunting and targetEnemyName do
-				attackCycle()
+				attackCombo()
 				task.wait(Config.AttackInterval)
 			end
 
@@ -257,7 +259,6 @@ end
 ------------------------------------------------------------
 local function stopAll()
 	isHunting = false
-	currentSlot = 1  -- reset cycle
 	if followThread then
 		pcall(function() task.cancel(followThread) end)
 		followThread = nil
@@ -490,7 +491,7 @@ tab:CreateSection("Info")
 
 tab:CreateParagraph({
 	title = "Cara Pakai",
-	content = "1. Pilih Area\n2. Pilih Nama Enemy\n3. Nyalain 'Farm Enemy'\n4. Atur tuning di section Settings\n\nAttack: cycle 1→2→3→4→5→1...",
+	content = "1. Pilih Area\n2. Pilih Nama Enemy\n3. Nyalain 'Farm Enemy'\n\nAttack: combo 5→4→3→2→1\n(tiap combo fire 5x sekaligus)",
 })
 
 ------------------------------------------------------------
