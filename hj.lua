@@ -1,26 +1,33 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v70                    ║
--- ║   Kite: validasi reachable aja            ║
+-- ║   AUTO FARM KAITUN v71                    ║
+-- ║   - Fix stuck approach                    ║
+-- ║   - KeepDistance = 30 (minimal distance)  ║
+-- ║   - Hysteresis mode (anti oscillation)    ║
+-- ║   - Kite repath threshold (hemat CPU)     ║
 -- ╚══════════════════════════════════════════╝
 
 local CONFIG = {
-    KeepDistance = 45,
+    -- Jarak
+    KeepDistance = 30,           -- jarak min (masuk kite & max attack)
+    KiteExitDistance = 45,       -- keluar kite, balik approach (hysteresis)
+    
     AttackCooldown = 0.5,
     LoopDelay = 0.03,
     
-    ApproachRepathThreshold = 1,
+    -- Approach
+    ApproachRepathThreshold = 5,       -- repath kalau enemy geser > 5 stud
+    ApproachRepathCooldown = 0.3,      -- minimal 0.3s antar repath
     
     -- Kite ring
-    KiteMinRadius = 1,
-    KiteMaxRadius = 50,
-    KiteRadiusStep = 5,
-    KiteAnglesPerRing = 50,
-    
-    -- Kite pathfinding validation
-    KitePathCheckMax = 2000,
+    KiteMinRadius = 50,
+    KiteMaxRadius = 100,
+    KiteRadiusStep = 10,               -- 6 ring: 50..100
+    KiteAnglesPerRing = 16,            -- 16 sudut = 22.5°
+    KitePathCheckMax = 20,             -- max 20 kandidat dicek
+    KiteRepathThreshold = 10,          -- repath kalau safe point geser > 10 stud
     
     -- Pathfinding
-    WaypointReached = 4,
+    WaypointReached = 3,
     WaypointSkip = 0,
     AgentRadius = 2,
     AgentHeight = 6,
@@ -63,7 +70,14 @@ local State = {
     PathWaypoints = nil, PathIndex = 1, PathTargetPos = nil,
     PathGoalType = nil,
     PathRequestId = 0,
+    -- Approach
     LastApproachEnemyPos = nil,
+    LastApproachRepathTime = 0,
+    -- Kite
+    LastKiteTarget = nil,
+    -- Mode
+    Mode = "approach",           -- "approach" | "kite"
+    -- Camera
     LockedEnemyPos = nil, ShiftlockSaved = nil,
 }
 
@@ -559,6 +573,7 @@ local function resetPath()
     State.PathTargetPos = nil
     State.PathGoalType = nil
     State.LastApproachEnemyPos = nil
+    State.LastKiteTarget = nil
 end
 
 local function requestPath(targetPos, goalType)
@@ -613,7 +628,6 @@ end
 
 local function followPath()
     if not State.Humanoid or not State.RootPart then return end
-    
     if not State.PathWaypoints then return end
     if State.PathIndex > #State.PathWaypoints then return end
     
@@ -633,7 +647,20 @@ local function followPath()
     end
 end
 
--- ⭐ Cek reachable aja (tanpa winding check)
+-- ⭐ Cek apakah path udah habis / player udah sampe ujung path
+local function isPathExhausted(myPos)
+    if not State.PathWaypoints then return true end
+    if State.PathIndex > #State.PathWaypoints then return true end
+    if #State.PathWaypoints > 0 then
+        local lastWp = State.PathWaypoints[#State.PathWaypoints]
+        if (myPos - lastWp.Position).Magnitude <= CONFIG.WaypointReached + 2 then
+            return true
+        end
+    end
+    return false
+end
+
+-- ⭐ Cek titik reachable pakai pathfinding
 local function isPointReachable(targetPos, myPos)
     local path = getKitePathObject()
     local ok = pcall(function()
@@ -649,7 +676,7 @@ local function isPointReachable(targetPos, myPos)
     return true
 end
 
--- ⭐ SAFE POINT - sort by jarak ke enemy, cek reachable satu per satu
+-- ⭐ SAFE POINT - generate titik ring 50-100, sort by jarak ke enemy, cek reachable
 local function findSafePointAroundPlayer(enemyPos, myPos)
     local candidates = {}
     for radius = CONFIG.KiteMinRadius, CONFIG.KiteMaxRadius, CONFIG.KiteRadiusStep do
@@ -690,7 +717,11 @@ local function attackEnemy(enemy)
     return true
 end
 
+-- ⭐ APPROACH - repath kalau: path abis, goal beda, enemy geser, atau belum ada path
 local function approachEnemy(enemyPos)
+    if not State.Humanoid or not State.RootPart then return end
+    
+    local myPos = State.RootPart.Position
     local needRepath = false
     
     if not State.PathWaypoints then
@@ -699,7 +730,8 @@ local function approachEnemy(enemyPos)
         needRepath = true
     elseif not State.LastApproachEnemyPos then
         needRepath = true
-    elseif State.PathIndex > #State.PathWaypoints then
+    elseif isPathExhausted(myPos) then
+        -- ⭐ FIX STUCK: path abis tapi belum sampe jarak → repath
         needRepath = true
     else
         local moved = (enemyPos - State.LastApproachEnemyPos).Magnitude
@@ -708,12 +740,48 @@ local function approachEnemy(enemyPos)
         end
     end
     
-    if needRepath then
+    -- Cooldown biar nggak spam kalau compute gagal terus
+    local now = tick()
+    if needRepath and (now - State.LastApproachRepathTime) >= CONFIG.ApproachRepathCooldown then
+        State.LastApproachRepathTime = now
         State.LastApproachEnemyPos = enemyPos
         requestPath(enemyPos, "approach")
     end
     
     followPath()
+end
+
+-- ⭐ KITE - repath kalau: path abis, goal beda, atau safe point geser > threshold
+local function kiteEnemy(enemyPos, myPos)
+    local safePoint = findSafePointAroundPlayer(enemyPos, myPos)
+    if not safePoint then
+        return false  -- gagal cari titik
+    end
+    
+    local needRepath = false
+    
+    if not State.PathWaypoints then
+        needRepath = true
+    elseif State.PathGoalType ~= "retreat" then
+        needRepath = true
+    elseif isPathExhausted(myPos) then
+        needRepath = true
+    elseif not State.LastKiteTarget then
+        needRepath = true
+    else
+        local moved = (safePoint - State.LastKiteTarget).Magnitude
+        if moved >= CONFIG.KiteRepathThreshold then
+            needRepath = true
+        end
+    end
+    
+    if needRepath then
+        State.LastKiteTarget = safePoint
+        requestPath(safePoint, "retreat")
+    end
+    
+    followPath()
+    return true
 end
 
 local function mainLoop()
@@ -739,11 +807,24 @@ local function mainLoop()
                 
                 State.LockedEnemyPos = enemyPos
                 
+                -- ⭐ Hysteresis mode switching (anti oscillation)
+                if State.Mode == "approach" then
+                    if dist <= CONFIG.KeepDistance then
+                        State.Mode = "kite"
+                    end
+                elseif State.Mode == "kite" then
+                    if dist >= CONFIG.KiteExitDistance then
+                        State.Mode = "approach"
+                    end
+                end
+                
+                -- Attack kalau dalam range (dist <= KeepDistance)
                 if dist <= CONFIG.KeepDistance then
                     attackEnemy(enemy)
                 end
                 
-                if dist > CONFIG.KeepDistance then
+                -- Aksi sesuai mode
+                if State.Mode == "approach" then
                     approachEnemy(enemyPos)
                     
                     setStatus(
@@ -753,10 +834,11 @@ local function mainLoop()
                         Color3.fromRGB(100, 180, 255)
                     )
                 else
-                    local safePoint = findSafePointAroundPlayer(enemyPos, myPos)
-                    if safePoint then
-                        requestPath(safePoint, "retreat")
-                        followPath()
+                    local ok = kiteEnemy(enemyPos, myPos)
+                    if not ok then
+                        -- Fallback: safe point gagal → balik approach
+                        State.Mode = "approach"
+                        approachEnemy(enemyPos)
                     end
                     
                     setStatus(
@@ -769,6 +851,7 @@ local function mainLoop()
             end
         else
             State.LockedEnemyPos = nil
+            State.Mode = "approach"
             resetPath()
             setStatus("No enemy | scanning...", Color3.fromRGB(160, 160, 180))
         end
@@ -780,7 +863,9 @@ task.spawn(function()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v70 - LOADED    ║")
+    print("║   AUTO FARM KAITUN v71 - LOADED    ║")
+    print("║   KeepDistance = 30                ║")
+    print("║   Hysteresis kite exit = 45        ║")
     print("╚════════════════════════════════════╝")
     
     setStatus("Starting...", Color3.fromRGB(255, 220, 100))
