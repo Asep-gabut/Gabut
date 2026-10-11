@@ -1,39 +1,21 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v71                    ║
--- ║   - Fix stuck approach                    ║
--- ║   - KeepDistance = 30 (minimal distance)  ║
--- ║   - Hysteresis mode (anti oscillation)    ║
--- ║   - Kite repath threshold (hemat CPU)     ║
+-- ║   AUTO FARM KAITUN v77 - SIMPLE           ║
+-- ║   Approach > 30 stud                      ║
+-- ║   Kite kalau < 30 stud (arah random)      ║
 -- ╚══════════════════════════════════════════╝
 
 local CONFIG = {
-    -- Jarak
-    KeepDistance = 30,           -- jarak min (masuk kite & max attack)
-    KiteExitDistance = 45,       -- keluar kite, balik approach (hysteresis)
-    
+    KeepDistance = 30,
+    KiteDistance = 60,
     AttackCooldown = 0.5,
-    LoopDelay = 0.03,
+    LoopDelay = 0.05,
     
-    -- Approach
-    ApproachRepathThreshold = 5,       -- repath kalau enemy geser > 5 stud
-    ApproachRepathCooldown = 0.3,      -- minimal 0.3s antar repath
-    
-    -- Kite ring
-    KiteMinRadius = 50,
-    KiteMaxRadius = 100,
-    KiteRadiusStep = 10,               -- 6 ring: 50..100
-    KiteAnglesPerRing = 16,            -- 16 sudut = 22.5°
-    KitePathCheckMax = 20,             -- max 20 kandidat dicek
-    KiteRepathThreshold = 10,          -- repath kalau safe point geser > 10 stud
-    
-    -- Pathfinding
-    WaypointReached = 3,
-    WaypointSkip = 0,
     AgentRadius = 2,
     AgentHeight = 6,
     AgentCanJump = true,
     AgentJumpHeight = 15,
     AgentMaxSlope = 40,
+    WaypointReached = 3,
     
     AutoUpgrade = true,
     AutoReconnect = true,
@@ -64,37 +46,15 @@ local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
 local State = {
-    Running = false, Character = nil, Humanoid = nil, RootPart = nil,
+    Running = false,
+    Character = nil, Humanoid = nil, RootPart = nil,
     LastAttack = 0, LastUpgrade = 0,
     EnemyFolders = {}, LastFolderScan = 0,
-    PathWaypoints = nil, PathIndex = 1, PathTargetPos = nil,
-    PathGoalType = nil,
+    PathWaypoints = nil, PathIndex = 1,
+    PathTargetPos = nil,
     PathRequestId = 0,
-    -- Approach
-    LastApproachEnemyPos = nil,
-    LastApproachRepathTime = 0,
-    -- Kite
-    LastKiteTarget = nil,
-    -- Mode
-    Mode = "approach",           -- "approach" | "kite"
-    -- Camera
-    LockedEnemyPos = nil, ShiftlockSaved = nil,
+    LockedEnemyPos = nil,
 }
-
-local kitePathObj = nil
-local function getKitePathObject()
-    if not kitePathObj then
-        kitePathObj = PathfindingService:CreatePath({
-            AgentRadius = CONFIG.AgentRadius,
-            AgentHeight = CONFIG.AgentHeight,
-            AgentCanJump = CONFIG.AgentCanJump,
-            AgentJumpHeight = CONFIG.AgentJumpHeight,
-            AgentMaxSlope = CONFIG.AgentMaxSlope,
-            Costs = { Water = 50 },
-        })
-    end
-    return kitePathObj
-end
 
 -- ═══════════════════════════════════════════
 --              STATUS OVERLAY
@@ -137,7 +97,6 @@ gradient.Parent = container
 
 local glowBar = Instance.new("Frame")
 glowBar.Size = UDim2.new(1, 0, 0, 2)
-glowBar.Position = UDim2.new(0, 0, 0, 0)
 glowBar.BackgroundColor3 = Color3.fromRGB(100, 200, 100)
 glowBar.BorderSizePixel = 0
 glowBar.ZIndex = 6
@@ -146,14 +105,6 @@ glowBar.Parent = container
 local glowCorner = Instance.new("UICorner")
 glowCorner.CornerRadius = UDim.new(0, 14)
 glowCorner.Parent = glowBar
-
-local glowFix = Instance.new("Frame")
-glowFix.Size = UDim2.new(1, 0, 0, 14)
-glowFix.Position = UDim2.new(0, 0, 1, -14)
-glowFix.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
-glowFix.BorderSizePixel = 0
-glowFix.ZIndex = 7
-glowFix.Parent = container
 
 local iconCircle = Instance.new("Frame")
 iconCircle.Size = UDim2.new(0, 44, 0, 44)
@@ -255,25 +206,19 @@ setStatus = function(msg, color)
         if msg:find("Approaching") then
             local dist = msg:match("(%d+%.%d+)") or "?"
             local count = msg:match("|%s*(%d+)%s*enemy") or "?"
-            local wp = msg:match("wp%s*(%d+/%d+)") or ""
             mainText = "Approaching"
-            subText = string.format("%s stud  •  %s enemy  %s", dist, count, wp)
+            subText = string.format("%s stud  •  %s enemy", dist, count)
             color = color or Color3.fromRGB(100, 180, 255)
         elseif msg:find("Kiting") then
             local dist = msg:match("(%d+%.%d+)") or "?"
             local count = msg:match("|%s*(%d+)%s*enemy") or "?"
-            local wp = msg:match("wp%s*(%d+/%d+)") or ""
             mainText = "Kiting"
-            subText = string.format("%s stud  •  %s enemy  %s", dist, count, wp)
+            subText = string.format("%s stud  •  %s enemy", dist, count)
             color = color or Color3.fromRGB(255, 180, 100)
         elseif msg:find("No enemy") then
             mainText = "Scanning"
             subText = "mencari musuh..."
             color = color or Color3.fromRGB(160, 160, 180)
-        elseif msg:find("Idle") then
-            mainText = "Idle"
-            subText = "menunggu"
-            color = color or Color3.fromRGB(120, 120, 140)
         elseif msg:find("Starting") then
             mainText = "Starting"
             subText = "menyiapkan..."
@@ -459,7 +404,6 @@ local function setShiftlock(enabled)
             end
         end
         if sl then
-            if State.ShiftlockSaved == nil then State.ShiftlockSaved = sl.Value end
             sl.Value = enabled
         end
     end)
@@ -529,8 +473,6 @@ local function getHumanoidAndHRP(enemy)
         or enemy:FindFirstChildWhichIsA("Humanoid", true)
     if not hum then return nil, nil end
     if hum.Health <= 0 then return nil, nil end
-    local ok, st = pcall(function() return hum:GetState() end)
-    if ok and st == Enum.HumanoidStateType.Dead then return nil, nil end
     local hrp = enemy:FindFirstChild("HumanoidRootPart")
         or enemy:FindFirstChild("HumanoidRootPart", true)
         or enemy.PrimaryPart
@@ -567,24 +509,13 @@ local function findNearestEnemy()
     return nearest, totalCount
 end
 
-local function resetPath()
-    State.PathWaypoints = nil
-    State.PathIndex = 1
-    State.PathTargetPos = nil
-    State.PathGoalType = nil
-    State.LastApproachEnemyPos = nil
-    State.LastKiteTarget = nil
-end
-
-local function requestPath(targetPos, goalType)
+local function requestPath(targetPos)
     if not State.Humanoid or not State.RootPart then return end
     if not targetPos then return end
     
     State.PathTargetPos = targetPos
-    State.PathGoalType = goalType
     State.PathRequestId = State.PathRequestId + 1
     local myRequestId = State.PathRequestId
-    
     local myPos = State.RootPart.Position
     
     task.spawn(function()
@@ -594,7 +525,6 @@ local function requestPath(targetPos, goalType)
             AgentCanJump = CONFIG.AgentCanJump,
             AgentJumpHeight = CONFIG.AgentJumpHeight,
             AgentMaxSlope = CONFIG.AgentMaxSlope,
-            Costs = { Water = 50 },
         })
         
         local ok = pcall(function()
@@ -604,21 +534,7 @@ local function requestPath(targetPos, goalType)
         if myRequestId ~= State.PathRequestId then return end
         
         if ok and path.Status == Enum.PathStatus.Success then
-            local waypoints = path:GetWaypoints()
-            
-            if CONFIG.WaypointSkip > 0 and #waypoints > 2 + CONFIG.WaypointSkip then
-                local newWaypoints = {}
-                table.insert(newWaypoints, waypoints[1])
-                for i = 2 + CONFIG.WaypointSkip, #waypoints, CONFIG.WaypointSkip do
-                    table.insert(newWaypoints, waypoints[i])
-                end
-                if newWaypoints[#newWaypoints] ~= waypoints[#waypoints] then
-                    table.insert(newWaypoints, waypoints[#waypoints])
-                end
-                waypoints = newWaypoints
-            end
-            
-            State.PathWaypoints = waypoints
+            State.PathWaypoints = path:GetWaypoints()
             State.PathIndex = 2
         else
             State.PathWaypoints = nil
@@ -628,6 +544,7 @@ end
 
 local function followPath()
     if not State.Humanoid or not State.RootPart then return end
+    
     if not State.PathWaypoints then return end
     if State.PathIndex > #State.PathWaypoints then return end
     
@@ -647,141 +564,60 @@ local function followPath()
     end
 end
 
--- ⭐ Cek apakah path udah habis / player udah sampe ujung path
-local function isPathExhausted(myPos)
-    if not State.PathWaypoints then return true end
-    if State.PathIndex > #State.PathWaypoints then return true end
-    if #State.PathWaypoints > 0 then
-        local lastWp = State.PathWaypoints[#State.PathWaypoints]
-        if (myPos - lastWp.Position).Magnitude <= CONFIG.WaypointReached + 2 then
-            return true
-        end
+-- ⭐ Kite: kabur ke arah manapun yang menjauh dari enemy
+local function kite(enemyPos, myPos)
+    local away = myPos - enemyPos
+    away = Vector3.new(away.X, 0, away.Z)
+    
+    if away.Magnitude < 0.5 then
+        -- Enemy persis di posisi player → pilih arah random
+        local angle = math.random() * math.pi * 2
+        away = Vector3.new(math.cos(angle), 0, math.sin(angle))
+    else
+        away = away.Unit
     end
-    return false
-end
-
--- ⭐ Cek titik reachable pakai pathfinding
-local function isPointReachable(targetPos, myPos)
-    local path = getKitePathObject()
-    local ok = pcall(function()
-        path:ComputeAsync(myPos, targetPos)
+    
+    local targetPos = myPos + away * CONFIG.KiteDistance
+    
+    -- Pake pathfinding ke titik itu
+    State.PathTargetPos = targetPos
+    State.PathRequestId = State.PathRequestId + 1
+    local myRequestId = State.PathRequestId
+    
+    task.spawn(function()
+        local path = PathfindingService:CreatePath({
+            AgentRadius = CONFIG.AgentRadius,
+            AgentHeight = CONFIG.AgentHeight,
+            AgentCanJump = CONFIG.AgentCanJump,
+            AgentJumpHeight = CONFIG.AgentJumpHeight,
+            AgentMaxSlope = CONFIG.AgentMaxSlope,
+        })
+        
+        local ok = pcall(function()
+            path:ComputeAsync(myPos, targetPos)
+        end)
+        
+        if myRequestId ~= State.PathRequestId then return end
+        
+        if ok and path.Status == Enum.PathStatus.Success then
+            State.PathWaypoints = path:GetWaypoints()
+            State.PathIndex = 2
+        end
     end)
     
-    if not ok then return false end
-    if path.Status ~= Enum.PathStatus.Success then return false end
-    
-    local waypoints = path:GetWaypoints()
-    if #waypoints < 2 then return false end
-    
-    return true
-end
-
--- ⭐ SAFE POINT - generate titik ring 50-100, sort by jarak ke enemy, cek reachable
-local function findSafePointAroundPlayer(enemyPos, myPos)
-    local candidates = {}
-    for radius = CONFIG.KiteMinRadius, CONFIG.KiteMaxRadius, CONFIG.KiteRadiusStep do
-        for i = 0, CONFIG.KiteAnglesPerRing - 1 do
-            local angle = (i / CONFIG.KiteAnglesPerRing) * math.pi * 2
-            local offset = Vector3.new(math.cos(angle), 0, math.sin(angle))
-            local point = Vector3.new(
-                myPos.X + offset.X * radius,
-                myPos.Y,
-                myPos.Z + offset.Z * radius
-            )
-            local distToEnemy = (point - enemyPos).Magnitude
-            table.insert(candidates, {pos = point, dist = distToEnemy})
-        end
-    end
-    
-    table.sort(candidates, function(a, b) return a.dist > b.dist end)
-    
-    local maxChecks = math.min(#candidates, CONFIG.KitePathCheckMax)
-    for i = 1, maxChecks do
-        if isPointReachable(candidates[i].pos, myPos) then
-            return candidates[i].pos
-        end
-    end
-    
-    return nil
+    -- Sambil nunggu path, gerak ke arah itu langsung
+    State.Humanoid:MoveTo(targetPos)
 end
 
 local function attackEnemy(enemy)
     local now = tick()
-    if now - State.LastAttack < CONFIG.AttackCooldown then return false end
+    if now - State.LastAttack < CONFIG.AttackCooldown then return end
     State.LastAttack = now
     task.spawn(function()
         pressQ()
         task.wait(0.08)
         pressE()
     end)
-    return true
-end
-
--- ⭐ APPROACH - repath kalau: path abis, goal beda, enemy geser, atau belum ada path
-local function approachEnemy(enemyPos)
-    if not State.Humanoid or not State.RootPart then return end
-    
-    local myPos = State.RootPart.Position
-    local needRepath = false
-    
-    if not State.PathWaypoints then
-        needRepath = true
-    elseif State.PathGoalType ~= "approach" then
-        needRepath = true
-    elseif not State.LastApproachEnemyPos then
-        needRepath = true
-    elseif isPathExhausted(myPos) then
-        -- ⭐ FIX STUCK: path abis tapi belum sampe jarak → repath
-        needRepath = true
-    else
-        local moved = (enemyPos - State.LastApproachEnemyPos).Magnitude
-        if moved >= CONFIG.ApproachRepathThreshold then
-            needRepath = true
-        end
-    end
-    
-    -- Cooldown biar nggak spam kalau compute gagal terus
-    local now = tick()
-    if needRepath and (now - State.LastApproachRepathTime) >= CONFIG.ApproachRepathCooldown then
-        State.LastApproachRepathTime = now
-        State.LastApproachEnemyPos = enemyPos
-        requestPath(enemyPos, "approach")
-    end
-    
-    followPath()
-end
-
--- ⭐ KITE - repath kalau: path abis, goal beda, atau safe point geser > threshold
-local function kiteEnemy(enemyPos, myPos)
-    local safePoint = findSafePointAroundPlayer(enemyPos, myPos)
-    if not safePoint then
-        return false  -- gagal cari titik
-    end
-    
-    local needRepath = false
-    
-    if not State.PathWaypoints then
-        needRepath = true
-    elseif State.PathGoalType ~= "retreat" then
-        needRepath = true
-    elseif isPathExhausted(myPos) then
-        needRepath = true
-    elseif not State.LastKiteTarget then
-        needRepath = true
-    else
-        local moved = (safePoint - State.LastKiteTarget).Magnitude
-        if moved >= CONFIG.KiteRepathThreshold then
-            needRepath = true
-        end
-    end
-    
-    if needRepath then
-        State.LastKiteTarget = safePoint
-        requestPath(safePoint, "retreat")
-    end
-    
-    followPath()
-    return true
 end
 
 local function mainLoop()
@@ -793,10 +629,10 @@ local function mainLoop()
         if CONFIG.AutoUpgrade and (tick() - State.LastUpgrade) >= CONFIG.UpgradeInterval then 
             upgradeSpell() 
         end
-
+        
         local sl = LocalPlayer:FindFirstChild("shiftlockMobile")
         if sl and sl.Value == false then setShiftlock(true) end
-
+        
         local enemy, count = findNearestEnemy()
         if enemy then
             local _, ehrp = getHumanoidAndHRP(enemy)
@@ -807,52 +643,30 @@ local function mainLoop()
                 
                 State.LockedEnemyPos = enemyPos
                 
-                -- ⭐ Hysteresis mode switching (anti oscillation)
-                if State.Mode == "approach" then
-                    if dist <= CONFIG.KeepDistance then
-                        State.Mode = "kite"
-                    end
-                elseif State.Mode == "kite" then
-                    if dist >= CONFIG.KiteExitDistance then
-                        State.Mode = "approach"
-                    end
-                end
-                
-                -- Attack kalau dalam range (dist <= KeepDistance)
-                if dist <= CONFIG.KeepDistance then
-                    attackEnemy(enemy)
-                end
-                
-                -- Aksi sesuai mode
-                if State.Mode == "approach" then
-                    approachEnemy(enemyPos)
+                if dist > CONFIG.KeepDistance then
+                    -- APPROACH
+                    requestPath(enemyPos)
+                    followPath()
                     
                     setStatus(
-                        string.format("Approaching (%.1f) | %d enemy | wp %d/%d", 
-                            dist, count, State.PathIndex, 
-                            State.PathWaypoints and #State.PathWaypoints or 0),
+                        string.format("Approaching (%.1f) | %d enemy", dist, count),
                         Color3.fromRGB(100, 180, 255)
                     )
                 else
-                    local ok = kiteEnemy(enemyPos, myPos)
-                    if not ok then
-                        -- Fallback: safe point gagal → balik approach
-                        State.Mode = "approach"
-                        approachEnemy(enemyPos)
-                    end
+                    -- KITE
+                    kite(enemyPos, myPos)
+                    attackEnemy(enemy)
                     
                     setStatus(
-                        string.format("Kiting (%.1f) | %d enemy | wp %d/%d", 
-                            dist, count, State.PathIndex, 
-                            State.PathWaypoints and #State.PathWaypoints or 0),
+                        string.format("Kiting (%.1f) | %d enemy", dist, count),
                         Color3.fromRGB(255, 180, 100)
                     )
                 end
             end
         else
             State.LockedEnemyPos = nil
-            State.Mode = "approach"
-            resetPath()
+            State.PathWaypoints = nil
+            State.PathTargetPos = nil
             setStatus("No enemy | scanning...", Color3.fromRGB(160, 160, 180))
         end
     end
@@ -863,9 +677,7 @@ task.spawn(function()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v71 - LOADED    ║")
-    print("║   KeepDistance = 30                ║")
-    print("║   Hysteresis kite exit = 45        ║")
+    print("║   AUTO FARM KAITUN v77 - SIMPLE    ║")
     print("╚════════════════════════════════════╝")
     
     setStatus("Starting...", Color3.fromRGB(255, 220, 100))
@@ -884,7 +696,7 @@ task.spawn(function()
     setShiftlock(true)
     
     setStatus("Running", Color3.fromRGB(100, 220, 100))
-    print("[KAITUN] Started auto farm...")
+    print("[KAITUN] Started...")
     mainLoop()
 end)
 
