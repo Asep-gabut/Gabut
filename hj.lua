@@ -16,10 +16,10 @@ local CONFIG = {
     PathPendingTimeout = 2,       -- detik — pending > ini di-reset
     
     -- Kite ring
-    KiteMinRadius = 50,
+    KiteMinRadius = 5,
     KiteMaxRadius = 100,
-    KiteRadiusStep = 10,
-    KiteAnglesPerRing = 16,
+    KiteRadiusStep = 1,
+    KiteAnglesPerRing = 50,
     KitePathCheckMax = 20,
     
     -- Pathfinding
