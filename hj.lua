@@ -1,14 +1,15 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v77 - SIMPLE           ║
--- ║   Approach > 30 stud                      ║
--- ║   Kite kalau < 30 stud (arah random)      ║
+-- ║   AUTO FARM KAITUN v80                    ║
+-- ║   Kite: 40 stud, spam compute (no lock)   ║
 -- ╚══════════════════════════════════════════╝
 
 local CONFIG = {
     KeepDistance = 30,
-    KiteDistance = 60,
+    KiteDistance = 40,          -- ⭐ 40 stud
     AttackCooldown = 0.5,
     LoopDelay = 0.05,
+    
+    KiteRingPoints = 16,
     
     AgentRadius = 2,
     AgentHeight = 6,
@@ -50,9 +51,16 @@ local State = {
     Character = nil, Humanoid = nil, RootPart = nil,
     LastAttack = 0, LastUpgrade = 0,
     EnemyFolders = {}, LastFolderScan = 0,
-    PathWaypoints = nil, PathIndex = 1,
-    PathTargetPos = nil,
-    PathRequestId = 0,
+    
+    ApproachWaypoints = nil,
+    ApproachIndex = 1,
+    
+    -- Kite (spam compute, pake ID check)
+    KiteRequestId = 0,
+    KiteWaypoints = nil,
+    KiteIndex = 1,
+    KiteTargetPos = nil,
+    
     LockedEnemyPos = nil,
 }
 
@@ -212,8 +220,9 @@ setStatus = function(msg, color)
         elseif msg:find("Kiting") then
             local dist = msg:match("(%d+%.%d+)") or "?"
             local count = msg:match("|%s*(%d+)%s*enemy") or "?"
+            local wp = msg:match("wp%s*(%d+/%d+)") or ""
             mainText = "Kiting"
-            subText = string.format("%s stud  •  %s enemy", dist, count)
+            subText = string.format("%s stud  •  %s enemy  %s", dist, count, wp)
             color = color or Color3.fromRGB(255, 180, 100)
         elseif msg:find("No enemy") then
             mainText = "Scanning"
@@ -403,9 +412,7 @@ local function setShiftlock(enabled)
                 if obj.Name:lower():find("shiftlock") then sl = obj break end
             end
         end
-        if sl then
-            sl.Value = enabled
-        end
+        if sl then sl.Value = enabled end
     end)
 end
 
@@ -509,16 +516,11 @@ local function findNearestEnemy()
     return nearest, totalCount
 end
 
-local function requestPath(targetPos)
-    if not State.Humanoid or not State.RootPart then return end
-    if not targetPos then return end
-    
-    State.PathTargetPos = targetPos
-    State.PathRequestId = State.PathRequestId + 1
-    local myRequestId = State.PathRequestId
-    local myPos = State.RootPart.Position
-    
-    task.spawn(function()
+-- ═══════════════════════════════════════════
+--          APPROACH
+-- ═══════════════════════════════════════════
+local function approach(enemyPos, myPos)
+    if not State.ApproachWaypoints then
         local path = PathfindingService:CreatePath({
             AgentRadius = CONFIG.AgentRadius,
             AgentHeight = CONFIG.AgentHeight,
@@ -528,61 +530,63 @@ local function requestPath(targetPos)
         })
         
         local ok = pcall(function()
-            path:ComputeAsync(myPos, targetPos)
+            path:ComputeAsync(myPos, enemyPos)
         end)
         
-        if myRequestId ~= State.PathRequestId then return end
-        
         if ok and path.Status == Enum.PathStatus.Success then
-            State.PathWaypoints = path:GetWaypoints()
-            State.PathIndex = 2
-        else
-            State.PathWaypoints = nil
+            State.ApproachWaypoints = path:GetWaypoints()
+            State.ApproachIndex = 2
         end
-    end)
-end
-
-local function followPath()
-    if not State.Humanoid or not State.RootPart then return end
-    
-    if not State.PathWaypoints then return end
-    if State.PathIndex > #State.PathWaypoints then return end
-    
-    local myPos = State.RootPart.Position
-    local wp = State.PathWaypoints[State.PathIndex]
-    local distToWp = (myPos - wp.Position).Magnitude
-    
-    while distToWp <= CONFIG.WaypointReached and State.PathIndex < #State.PathWaypoints do
-        State.PathIndex = State.PathIndex + 1
-        wp = State.PathWaypoints[State.PathIndex]
-        distToWp = (myPos - wp.Position).Magnitude
     end
     
-    State.Humanoid:MoveTo(wp.Position)
-    if wp.Action == Enum.PathWaypointAction.Jump then
-        State.Humanoid.Jump = true
+    if State.ApproachWaypoints and State.ApproachIndex <= #State.ApproachWaypoints then
+        local wp = State.ApproachWaypoints[State.ApproachIndex]
+        State.Humanoid:MoveTo(wp.Position)
+        
+        if wp.Action == Enum.PathWaypointAction.Jump then
+            State.Humanoid.Jump = true
+        end
+        
+        if (myPos - wp.Position).Magnitude <= CONFIG.WaypointReached then
+            State.ApproachIndex = State.ApproachIndex + 1
+        end
     end
 end
 
--- ⭐ Kite: kabur ke arah manapun yang menjauh dari enemy
+-- ═══════════════════════════════════════════
+--          KITE (spam compute, ID check)
+-- ═══════════════════════════════════════════
+
+local function getKiteTarget(enemyPos, myPos)
+    local bestPoint = nil
+    local bestDist = -math.huge
+    
+    for i = 0, CONFIG.KiteRingPoints - 1 do
+        local angle = (i / CONFIG.KiteRingPoints) * math.pi * 2
+        local offset = Vector3.new(math.cos(angle), 0, math.sin(angle))
+        local point = Vector3.new(
+            myPos.X + offset.X * CONFIG.KiteDistance,
+            myPos.Y,
+            myPos.Z + offset.Z * CONFIG.KiteDistance
+        )
+        local distToEnemy = (point - enemyPos).Magnitude
+        if distToEnemy > bestDist then
+            bestDist = distToEnemy
+            bestPoint = point
+        end
+    end
+    
+    return bestPoint
+end
+
 local function kite(enemyPos, myPos)
-    local away = myPos - enemyPos
-    away = Vector3.new(away.X, 0, away.Z)
+    -- 1. Hitung target kite
+    local targetPos = getKiteTarget(enemyPos, myPos)
+    State.KiteTargetPos = targetPos
     
-    if away.Magnitude < 0.5 then
-        -- Enemy persis di posisi player → pilih arah random
-        local angle = math.random() * math.pi * 2
-        away = Vector3.new(math.cos(angle), 0, math.sin(angle))
-    else
-        away = away.Unit
-    end
-    
-    local targetPos = myPos + away * CONFIG.KiteDistance
-    
-    -- Pake pathfinding ke titik itu
-    State.PathTargetPos = targetPos
-    State.PathRequestId = State.PathRequestId + 1
-    local myRequestId = State.PathRequestId
+    -- 2. Spam compute tiap frame (no lock), pake ID check
+    State.KiteRequestId = State.KiteRequestId + 1
+    local myId = State.KiteRequestId
     
     task.spawn(function()
         local path = PathfindingService:CreatePath({
@@ -597,16 +601,43 @@ local function kite(enemyPos, myPos)
             path:ComputeAsync(myPos, targetPos)
         end)
         
-        if myRequestId ~= State.PathRequestId then return end
+        -- Tunggu selesai
+        local timeout = tick() + 1
+        while path.Status == Enum.PathStatus.Computing and tick() < timeout do
+            task.wait()
+        end
+        
+        -- Cek masih relevan?
+        if myId ~= State.KiteRequestId then return end
         
         if ok and path.Status == Enum.PathStatus.Success then
-            State.PathWaypoints = path:GetWaypoints()
-            State.PathIndex = 2
+            local wps = path:GetWaypoints()
+            if #wps >= 2 then
+                State.KiteWaypoints = wps
+                State.KiteIndex = 2
+            end
         end
     end)
     
-    -- Sambil nunggu path, gerak ke arah itu langsung
-    State.Humanoid:MoveTo(targetPos)
+    -- 3. Gerak pakai waypoint, fallback ke target langsung
+    if State.KiteWaypoints and State.KiteIndex <= #State.KiteWaypoints then
+        local wp = State.KiteWaypoints[State.KiteIndex]
+        State.Humanoid:MoveTo(wp.Position)
+        
+        if wp.Action == Enum.PathWaypointAction.Jump then
+            State.Humanoid.Jump = true
+        end
+        
+        if (myPos - wp.Position).Magnitude <= CONFIG.WaypointReached then
+            State.KiteIndex = State.KiteIndex + 1
+        end
+    else
+        if targetPos then
+            State.Humanoid:MoveTo(targetPos)
+        end
+    end
+    
+    return State.KiteIndex, State.KiteWaypoints and #State.KiteWaypoints or 0
 end
 
 local function attackEnemy(enemy)
@@ -645,8 +676,10 @@ local function mainLoop()
                 
                 if dist > CONFIG.KeepDistance then
                     -- APPROACH
-                    requestPath(enemyPos)
-                    followPath()
+                    State.KiteWaypoints = nil
+                    State.KiteIndex = 1
+                    
+                    approach(enemyPos, myPos)
                     
                     setStatus(
                         string.format("Approaching (%.1f) | %d enemy", dist, count),
@@ -654,19 +687,25 @@ local function mainLoop()
                     )
                 else
                     -- KITE
-                    kite(enemyPos, myPos)
+                    State.ApproachWaypoints = nil
+                    State.ApproachIndex = 1
+                    
+                    local wpIdx, wpTotal = kite(enemyPos, myPos)
                     attackEnemy(enemy)
                     
                     setStatus(
-                        string.format("Kiting (%.1f) | %d enemy", dist, count),
+                        string.format("Kiting (%.1f) | %d enemy | wp %d/%d", 
+                            dist, count, wpIdx, wpTotal),
                         Color3.fromRGB(255, 180, 100)
                     )
                 end
             end
         else
             State.LockedEnemyPos = nil
-            State.PathWaypoints = nil
-            State.PathTargetPos = nil
+            State.ApproachWaypoints = nil
+            State.ApproachIndex = 1
+            State.KiteWaypoints = nil
+            State.KiteIndex = 1
             setStatus("No enemy | scanning...", Color3.fromRGB(160, 160, 180))
         end
     end
@@ -677,7 +716,8 @@ task.spawn(function()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v77 - SIMPLE    ║")
+    print("║   AUTO FARM KAITUN v80 - LOADED    ║")
+    print("║   Kite 40 stud, spam compute       ║")
     print("╚════════════════════════════════════╝")
     
     setStatus("Starting...", Color3.fromRGB(255, 220, 100))
