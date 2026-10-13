@@ -1,6 +1,6 @@
 -- ╔══════════════════════════════════════════╗
--- ║   AUTO FARM KAITUN v71                    ║
--- ║   Fix approach stuck (pending + fallback) ║
+-- ║   AUTO FARM KAITUN v72                    ║
+-- ║   Fix kite diam pas musuh dekat           ║
 -- ╚══════════════════════════════════════════╝
 
 local CONFIG = {
@@ -11,15 +11,18 @@ local CONFIG = {
     ApproachRepathThreshold = 5,
     
     -- Stuck detection
-    StuckCheckInterval = 1.5,     -- detik
-    StuckMinMove = 1,             -- stud — gerak < ini dianggap stuck
-    PathPendingTimeout = 2,       -- detik — pending > ini di-reset
+    StuckCheckInterval = 1.5,
+    StuckMinMove = 1,
+    PathPendingTimeout = 2,
+    
+    -- Emergency kite
+    EmergencyDistance = 15,     -- musuh < ini → langsung kabur simple
     
     -- Kite ring
-    KiteMinRadius = 5,
+    KiteMinRadius = 50,
     KiteMaxRadius = 100,
-    KiteRadiusStep = 1,
-    KiteAnglesPerRing = 50,
+    KiteRadiusStep = 10,
+    KiteAnglesPerRing = 16,
     KitePathCheckMax = 20,
     
     -- Pathfinding
@@ -70,7 +73,6 @@ local State = {
     PathPendingSince = 0,
     LastApproachEnemyPos = nil,
     LockedEnemyPos = nil, ShiftlockSaved = nil,
-    -- Stuck detection
     LastStuckCheck = 0,
     LastStuckPos = nil,
     ForceRepath = false,
@@ -261,6 +263,12 @@ setStatus = function(msg, color)
             mainText = "Kiting"
             subText = string.format("%s stud  •  %s enemy  %s", dist, count, wp)
             color = color or Color3.fromRGB(255, 180, 100)
+        elseif msg:find("Emergency") then
+            local dist = msg:match("(%d+%.%d+)") or "?"
+            local count = msg:match("|%s*(%d+)%s*enemy") or "?"
+            mainText = "Emergency"
+            subText = string.format("%s stud  •  %s enemy", dist, count)
+            color = color or Color3.fromRGB(255, 100, 100)
         elseif msg:find("No enemy") then
             mainText = "Scanning"
             subText = "mencari musuh..."
@@ -570,7 +578,16 @@ local function resetPath()
     State.LastApproachEnemyPos = nil
 end
 
--- ⭐ requestPath dengan PathPending guard
+-- ⭐ Cancel path pending (biar path lama gak dipakai + pending di-reset)
+local function cancelPath()
+    State.PathRequestId = State.PathRequestId + 1  -- discard pending lama
+    State.PathPending = false
+    State.PathWaypoints = nil
+    State.PathIndex = 1
+    State.PathTargetPos = nil
+    State.PathGoalType = nil
+end
+
 local function requestPath(targetPos, goalType)
     if not State.Humanoid or not State.RootPart then return end
     if not targetPos then return end
@@ -598,7 +615,6 @@ local function requestPath(targetPos, goalType)
             path:ComputeAsync(myPos, targetPos)
         end)
         
-        -- kalau bukan request terbaru, jangan sentuh State (dibiarkan request terbaru yang handle)
         if myRequestId ~= State.PathRequestId then return end
         
         State.PathPending = false
@@ -626,7 +642,6 @@ local function requestPath(targetPos, goalType)
     end)
 end
 
--- ⭐ followPath dengan horizontal distance (biar gak stuck di waypoint Y beda)
 local function horizontalDist(a, b)
     local d = a - b
     return Vector3.new(d.X, 0, d.Z).Magnitude
@@ -653,11 +668,29 @@ local function followPath()
     end
 end
 
--- ⭐ Fallback direct move (kalau pathfinding gagal)
 local function directMoveTo(targetPos)
     if State.Humanoid then
         State.Humanoid:MoveTo(targetPos)
     end
+end
+
+-- ⭐ Simple escape - langsung kabur menjauh dari enemy, tanpa pathfinding
+local function simpleEscape(enemyPos, myPos, distance)
+    if not State.Humanoid then return end
+    
+    local dir = myPos - enemyPos
+    dir = Vector3.new(dir.X, 0, dir.Z)
+    
+    -- kalau player & enemy persis sama posisi, pilih arah random
+    if dir.Magnitude < 0.5 then
+        local angle = math.random() * math.pi * 2
+        dir = Vector3.new(math.cos(angle), 0, math.sin(angle))
+    else
+        dir = dir.Unit
+    end
+    
+    local escapePos = myPos + dir * distance
+    State.Humanoid:MoveTo(escapePos)
 end
 
 local function isPointReachable(targetPos, myPos)
@@ -715,7 +748,6 @@ local function attackEnemy(enemy)
     return true
 end
 
--- ⭐ Stuck detection - cek posisi player, kalau gak gerak → force repath
 local function updateStuckDetection()
     local now = tick()
     if now - State.LastStuckCheck < CONFIG.StuckCheckInterval then return end
@@ -727,7 +759,6 @@ local function updateStuckDetection()
     if State.LastStuckPos then
         local moved = (cur - State.LastStuckPos).Magnitude
         if moved < CONFIG.StuckMinMove then
-            -- player stuck! force repath
             State.ForceRepath = true
             State.PathWaypoints = nil
             State.LastApproachEnemyPos = nil
@@ -736,7 +767,6 @@ local function updateStuckDetection()
     State.LastStuckPos = cur
 end
 
--- ⭐ Timeout pending — kalau pending kelamaan, reset biar bisa request baru
 local function checkPendingTimeout()
     if State.PathPending and (tick() - State.PathPendingSince) > CONFIG.PathPendingTimeout then
         State.PathPending = false
@@ -767,18 +797,55 @@ local function approachEnemy(enemyPos)
     
     if needRepath then
         State.LastApproachEnemyPos = enemyPos
-        -- kalau nggak ada pending, boleh request baru
         if not State.PathPending then
             requestPath(enemyPos, "approach")
         end
     end
     
-    -- follow path kalau ada, kalau nggak ada → fallback direct move
     if State.PathWaypoints then
         followPath()
     else
         directMoveTo(enemyPos)
     end
+end
+
+-- ⭐ KITE handler dengan emergency + fallback
+local function kiteEnemy(enemyPos, myPos)
+    -- EMERGENCY: musuh sangat dekat → langsung kabur tanpa cek pathfinding
+    local dist = (enemyPos - myPos).Magnitude
+    if dist < CONFIG.EmergencyDistance then
+        -- cancel path lama biar gak gerak aneh ngikutin path usang
+        if State.PathGoalType ~= "emergency" then
+            cancelPath()
+            State.PathGoalType = "emergency"
+        end
+        simpleEscape(enemyPos, myPos, CONFIG.KiteMinRadius)
+        return "emergency"
+    end
+    
+    -- Normal kite: cek pending guard
+    if not State.PathPending then
+        local safePoint = findSafePointAroundPlayer(enemyPos, myPos)
+        if safePoint then
+            requestPath(safePoint, "retreat")
+        else
+            -- semua kandidat gagal → fallback kabur simple
+            simpleEscape(enemyPos, myPos, CONFIG.KiteMinRadius)
+            cancelPath()
+            State.PathGoalType = "emergency"
+            return "emergency"
+        end
+    end
+    
+    -- Follow path kalau ada
+    if State.PathWaypoints then
+        followPath()
+    elseif State.PathGoalType ~= "emergency" then
+        -- pending tapi belum ada path → minimal gerak menjauh
+        simpleEscape(enemyPos, myPos, CONFIG.KiteMinRadius)
+    end
+    
+    return "kite"
 end
 
 local function mainLoop()
@@ -794,7 +861,6 @@ local function mainLoop()
         local sl = LocalPlayer:FindFirstChild("shiftlockMobile")
         if sl and sl.Value == false then setShiftlock(true) end
 
-        -- cek stuck & timeout tiap frame
         updateStuckDetection()
         checkPendingTimeout()
 
@@ -822,18 +888,21 @@ local function mainLoop()
                         Color3.fromRGB(100, 180, 255)
                     )
                 else
-                    local safePoint = findSafePointAroundPlayer(enemyPos, myPos)
-                    if safePoint then
-                        requestPath(safePoint, "retreat")
-                        followPath()
-                    end
+                    local mode = kiteEnemy(enemyPos, myPos)
                     
-                    setStatus(
-                        string.format("Kiting (%.1f) | %d enemy | wp %d/%d", 
-                            dist, count, State.PathIndex, 
-                            State.PathWaypoints and #State.PathWaypoints or 0),
-                        Color3.fromRGB(255, 180, 100)
-                    )
+                    if mode == "emergency" then
+                        setStatus(
+                            string.format("Emergency (%.1f) | %d enemy", dist, count),
+                            Color3.fromRGB(255, 100, 100)
+                        )
+                    else
+                        setStatus(
+                            string.format("Kiting (%.1f) | %d enemy | wp %d/%d", 
+                                dist, count, State.PathIndex, 
+                                State.PathWaypoints and #State.PathWaypoints or 0),
+                            Color3.fromRGB(255, 180, 100)
+                        )
+                    end
                 end
             end
         else
@@ -849,8 +918,8 @@ task.spawn(function()
     if CONFIG.AntiLag_HidePlayers then AntiLag.hideOtherPlayers() end
     
     print("╔════════════════════════════════════╗")
-    print("║   AUTO FARM KAITUN v71 - LOADED    ║")
-    print("║   Fix approach stuck               ║")
+    print("║   AUTO FARM KAITUN v72 - LOADED    ║")
+    print("║   Fix kite diam pas musuh dekat    ║")
     print("╚════════════════════════════════════╝")
     
     setStatus("Starting...", Color3.fromRGB(255, 220, 100))
