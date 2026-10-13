@@ -4,7 +4,7 @@
 -- ╚══════════════════════════════════════════╝
 
 local CONFIG = {
-    KeepDistance = 45,
+    KeepDistance = 35,
     AttackCooldown = 0.5,
     LoopDelay = 0.03,
     
