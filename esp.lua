@@ -81,7 +81,7 @@ local ESPTab = Window:CreateTab("ESP", 4483362458)
 local VisualsTab = Window:CreateTab("Visuals", 4483362458)
 local WeaponTab = Window:CreateTab("Weapon", 4483362458)
 
--- ==================== AIMBOT ====================
+-- AIMBOT
 MainTab:CreateToggle({
     Name = "Enable Aimbot",
     CurrentValue = false,
@@ -118,7 +118,7 @@ MainTab:CreateSlider({
     Callback = function(Value) config.smooth = Value / 100 end,
 })
 
--- ==================== FOV ====================
+-- FOV 
 FOVTab:CreateToggle({
     Name = "Show FOV Circle",
     CurrentValue = true,
@@ -170,7 +170,7 @@ FOVTab:CreateColorPicker({
     end,
 })
 
--- ==================== ESP ====================
+--  ESP
 ESPTab:CreateToggle({
     Name = "Enable ESP",
     CurrentValue = true,
@@ -225,7 +225,7 @@ ESPTab:CreateSlider({
     Callback = function(Value) config.espMaxDistance = Value end,
 })
 
--- ==================== VISUALS ====================
+--VISUALS
 VisualsTab:CreateColorPicker({
     Name = "Enemy Color",
     Color = Color3.fromRGB(255, 50, 50),
@@ -275,7 +275,7 @@ WeaponTab:CreateToggle({
     Callback = function(Value) config.triggerBot = Value end,
 })
 
--- ==================== FUNCTIONS ====================
+--FUNCTIONS
 local function isSameTeam(player)
     if not config.teamFilter then return false end
     
@@ -537,7 +537,7 @@ local function updateESP()
     end
 end
 
--- ==================== AIMBOT ====================
+-- AIMBOT
 local PRIORITY_PARTS = {"Head", "UpperTorso", "Torso", "HumanoidRootPart"}
 
 local raycastParams = RaycastParams.new()
