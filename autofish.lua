@@ -1,14 +1,10 @@
---[[
-Auto Fish with Rayfield UI
-Features: Auto Fishing, Lag Fix, Teleports to Roslit Bay & Atlantis
-]]
 
 local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
 local Rep = game:GetService("ReplicatedStorage")
 local Net = Rep:WaitForChild("packages"):WaitForChild("Net")
 local Player = game:GetService("Players").LocalPlayer
 
--- Wait for player to have character
+
 repeat task.wait() until Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
 
 local Window = Rayfield:CreateWindow({
@@ -85,6 +81,6 @@ task.spawn(function()
                 end
             end)
         end
-        task.wait(1)
+        task.wait()
     end
 end)
