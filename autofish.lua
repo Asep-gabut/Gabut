@@ -85,7 +85,7 @@ task.spawn(function()
                 end
 
                 if getgenv().AutoFish and Player.PlayerGui:FindFirstChild("reel") then
-                    task.wait(0.4)
+                    task.wait(0.5)
                     Net:WaitForChild("RE/Reel/Finish"):FireServer({{ e = 100.25426827967165, p = false, l = {}, d = { SlashCount = 0 } }})
                 end
             end)
