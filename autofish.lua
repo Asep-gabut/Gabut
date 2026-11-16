@@ -73,7 +73,7 @@ task.spawn(function()
         if getgenv().AutoFish then
             pcall(function()
                 -- Cast
-                Net:WaitForChild("RF/FishingRod/Cast"):InvokeServer(0.1, false)
+                Net:WaitForChild("RF/FishingRod/Cast"):InvokeServer(20.1, false)
                 
                 -- Loop shake until reel gui appear using while task.wait(0.1)
                 while task.wait(0.1) do
