@@ -72,28 +72,42 @@ task.spawn(function()
     while true do
         if getgenv().AutoFish then
             pcall(function()
-                -- 1. Cast
-                Net:WaitForChild("RF/FishingRod/Cast"):InvokeServer(0.1, false)
+                -- 1. Cast (hanya lempar jika GUI reel tidak sedang aktif)
+                local reel = Player.PlayerGui:FindFirstChild("reel")
+                if not (reel and (not reel:IsA("ScreenGui") or reel.Enabled)) then
+                    Net:WaitForChild("RF/FishingRod/Cast"):InvokeServer(0.1, false)
+                    task.wait(0.5)
+                end
                 
-                -- 2. ONLY INNER LOOP: Shake until reel GUI appears
+                -- 2. ONLY INNER LOOP: Shake until reel GUI appears (aktif)
+                local startTime = tick()
                 while task.wait(0.1) do
                     if not getgenv().AutoFish then break end
+                    if tick() - startTime > 15 then break end
                     Net:WaitForChild("RE/LureShake/Shake"):FireServer()
-                    if Player.PlayerGui:FindFirstChild("reel") then
+                    local currentReel = Player.PlayerGui:FindFirstChild("reel")
+                    if currentReel and (not currentReel:IsA("ScreenGui") or currentReel.Enabled) then
                         break
                     end
                 end
 
-                -- 3. Wait 0.4 seconds after reel GUI appears
-                
-
-                -- 4. Fire reel finish
-                if getgenv().AutoFish and Player.PlayerGui:FindFirstChild("reel") then
-                    task.wait(0.4)
+                local activeReel = Player.PlayerGui:FindFirstChild("reel")
+                if getgenv().AutoFish and activeReel and (not activeReel:IsA("ScreenGui") or activeReel.Enabled) then
+                    task.wait(0.5)
                     Net:WaitForChild("RE/Reel/Finish"):FireServer({{ e = 100.25426827967165, p = false, l = {}, d = { SlashCount = 0 } }})
+                    
+                    -- Tunggu GUI reel hilang/nonaktif sebelum mengulang loop
+                    local closeTime = tick()
+                    while task.wait(0.1) do
+                        local r = Player.PlayerGui:FindFirstChild("reel")
+                        if not (r and (not r:IsA("ScreenGui") or r.Enabled)) or (tick() - closeTime > 5) then
+                            break
+                        end
+                    end
+                    task.wait(0.3)
                 end
             end)
         end
-        task.wait(1)
+        task.wait()
     end
 end)
