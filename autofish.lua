@@ -85,10 +85,11 @@ task.spawn(function()
                 end
 
                 -- 3. Wait 0.4 seconds after reel GUI appears
-                task.wait(0.4)
+                
 
                 -- 4. Fire reel finish
                 if getgenv().AutoFish and Player.PlayerGui:FindFirstChild("reel") then
+                    task.wait(0.4)
                     Net:WaitForChild("RE/Reel/Finish"):FireServer({{ e = 100.25426827967165, p = false, l = {}, d = { SlashCount = 0 } }})
                 end
             end)
