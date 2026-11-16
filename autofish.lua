@@ -80,7 +80,7 @@ task.spawn(function()
                     if not getgenv().AutoFish then break end
                     Net:WaitForChild("RE/LureShake/Shake"):FireServer()
                     task.wait(0.1)
-                until Player.PlayerGui:FindFirstChild("reel") and (Player.PlayerGui.reel.Enabled or Player.PlayerGui.reel.Visible)
+                until Player.PlayerGui:FindFirstChild("reel")
 
                 -- Wait 0.4 seconds
                 task.wait(0.4)
@@ -92,7 +92,7 @@ task.spawn(function()
                     -- Wait until reel GUI is gone after finish before next cast
                     repeat
                         task.wait(0.1)
-                    until not Player.PlayerGui:FindFirstChild("reel") or not (Player.PlayerGui.reel.Enabled or Player.PlayerGui.reel.Visible)
+                    until not Player.PlayerGui:FindFirstChild("reel")
                 end
             end)
         end
