@@ -103,6 +103,6 @@ task.spawn(function()
                 end
             end)
         end
-        task.wait(1)
+        task.wait()
     end
 end)
