@@ -2,7 +2,7 @@
 Auto Fish with Rayfield UI
 Features: Auto Fishing, Lag Fix, Teleports to Roslit Bay & Atlantis
 ]]
-
+getgenv().RAYFIELD_SECURE = true
 local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
 local Rep = game:GetService("ReplicatedStorage")
 local Net = Rep:WaitForChild("packages"):WaitForChild("Net")
