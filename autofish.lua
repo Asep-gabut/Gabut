@@ -73,10 +73,10 @@ task.spawn(function()
         if getgenv().AutoFish then
             pcall(function()
                 -- 1. Cast
-                Net:WaitForChild("RF/FishingRod/Cast"):InvokeServer(30.1, false)
+                Net:WaitForChild("RF/FishingRod/Cast"):InvokeServer(0.1, false)
                 
                 -- 2. ONLY INNER LOOP: Shake until reel GUI appears
-                while task.wait(1) do
+                while task.wait(0.1) do
                     if not getgenv().AutoFish then break end
                     Net:WaitForChild("RE/LureShake/Shake"):FireServer()
                     if Player.PlayerGui:FindFirstChild("reel") then
@@ -84,11 +84,8 @@ task.spawn(function()
                     end
                 end
 
-                -- 3. Wait 0.4 seconds after reel GUI appears
-                task.wait(0.4)
-
-                -- 4. Fire reel finish
                 if getgenv().AutoFish and Player.PlayerGui:FindFirstChild("reel") then
+                    task.wait(0.4)
                     Net:WaitForChild("RE/Reel/Finish"):FireServer({{ e = 100.25426827967165, p = false, l = {}, d = { SlashCount = 0 } }})
                 end
             end)
